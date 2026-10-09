@@ -297,6 +297,24 @@ export async function listMediaProviders() {
     }));
 }
 
+export async function preserveMediaProviderModels(sourcePath: string, targetPath: string) {
+  const previous = await readFile(targetPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (previous === undefined) return;
+  const incoming = parseProvider(await readFile(sourcePath, "utf8"));
+  if (incoming.models.length) return;
+  const existing = parseProvider(previous);
+  if (!existing.models.length || !incoming.modelProperty) return;
+  const newline = previous.includes("\r\n") ? "\r\n" : "\n";
+  const formatted = JSON.stringify(existing.models, null, 2).replace(/\n/g, `${newline}  `);
+  const property = incoming.modelProperty.type === "ObjectProperty" ? incoming.modelProperty : undefined;
+  if (!property) return;
+  const source = await readFile(sourcePath, "utf8");
+  return source.slice(0, property.value.start!) + formatted + source.slice(property.value.end!);
+}
+
 export async function addMediaProvider(source: string) {
   const { id } = parseProvider(source);
   const fileName = `${id}.ts`;
@@ -361,8 +379,7 @@ export async function refreshMediaProviderModels(fileName: string, revision?: st
   const requestedType = z.enum(["text", "image", "video", "audio"]).safeParse(modelsUrl.searchParams.get("type"));
   const models = result.data.map(model => {
     const id = model.id.trim();
-    const previous = provider.models.find(item => item.id === id)
-      ?? (provider.id === tfRouter.id ? tfRouter.models.find(item => item.id === id) : undefined);
+    const previous = provider.models.find(item => item.id === id);
     const type = model.type ?? (requestedType.success ? requestedType.data : previous?.type);
     if (!type) invalid(t`模型 ${id} 缺少 type，请在返回数据或 modelsUrl 的 type 参数中指定`);
     if (requestedType.success && type !== requestedType.data) invalid(t`模型 ${id} 的 type 与请求类型不一致`);

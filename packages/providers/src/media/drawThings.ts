@@ -187,27 +187,7 @@ export default {
   version,
   readme: "本机 Draw Things Local API 图片与视频供应商。请先开启 Local API Server。模型列表会从本机 Draw Things Models 目录筛选已配置模型，也可在媒体模型设置中切换；参数会按模型类型自动选择。供应商级额外请求参数填写 JSON 对象，例如 {\"seed\":123456}；编辑具体模型时，还可以在模型参数中配置该模型专用的 steps、seed、loras 等参数，模型参数优先于供应商级参数。请求默认超时 10 分钟，可在编辑窗口调整，最长 24 小时。",
   rules,
-  models: [
-    { id: "z_image_turbo_1.0_i8x.ckpt", label: "Z Image Turbo (本地)", type: "image", mode: ["text", "singleImage"] },
-    { id: "z_image_1.0_i8x.ckpt", label: "Z Image 1.0 (本地)", type: "image", mode: ["text", "singleImage"] },
-    { id: "krea_2_turbo_i8x.ckpt", label: "Krea 2 Turbo (本地)", type: "image", mode: ["text", "singleImage"] },
-    {
-      id: "qwen_image_2.1_i8x.ckpt", label: "Qwen Image 2.1 (本地)", type: "image", mode: ["text", "singleImage"],
-      imageSizes: [
-        "2400x1792", "1800x1344", "1200x896",
-        "1792x2400", "1344x1800", "896x1200",
-        "2528x1696", "1896x1272", "1264x848",
-        "1696x2528", "1272x1896", "848x1264",
-      ],
-      imageRatios: ["4:3", "3:4", "3:2", "2:3"],
-    },
-    { id: "ideogram_4_i8x.ckpt", label: "Ideogram 4 (本地)", type: "image", mode: ["text", "singleImage"] },
-    { id: "ideogram_4_fast_i8x.ckpt", label: "Ideogram 4 Fast (本地)", type: "image", mode: ["text", "singleImage"] },
-    { id: "ideogram_4_instant_i8x.ckpt", label: "Ideogram 4 Instant (本地)", type: "image", mode: ["text", "singleImage"] },
-    { id: "minimax_h3_ref2va_i6x.ckpt", label: "MiniMax H3 ref2va 6-bit (本地)", type: "video", mode: ["text", "startFrameOptional"], audio: "optional" },
-    { id: "minimax_h3_ref2va_i8x.ckpt", label: "MiniMax H3 ref2va 8-bit (本地)", type: "video", mode: ["text", "startFrameOptional"], audio: "optional" },
-    { id: "minimax_h3_fl2va_i8x.ckpt", label: "MiniMax H3 fl2va (本地)", type: "video", mode: ["text", "startFrameOptional"], audio: "optional" },
-  ] satisfies ProviderModel[],
+  models: [],
   async healthCheck() {
     const baseUrl = (this.config.baseUrl?.trim() || "http://127.0.0.1:7888").replace(/\/$/, "");
     try {

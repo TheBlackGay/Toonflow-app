@@ -64,16 +64,7 @@ export default {
   readme: `秘塔科技提供高性价比的 MiniMax H3 视频生成服务：768P 仅 0.09 元/秒，2K 仅 0.15 元/秒。支持原生 2K、音画同步，API 兼容 OpenAI 协议，同时支持 ComfyUI、无限画布，无需自行部署 GPU。
  \n 👉 点击 [前往平台](https://metaso.cn/minimax-h3/?s=toon) 获取密钥`,
   rules,
-  models: [
-    {
-      id: "MiniMax-H3",
-      label: "MiniMax-H3",
-      type: "video",
-      mode: ["text", "startFrameOptional", ["imageReference:9", "videoReference:3", "audioReference:3"]],
-      audio: "optional",
-      durationResolutionMap: [{ duration: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolution: ["768P", "2K"] }],
-    },
-  ] satisfies ProviderModel[],
+  models: [],
   async generateVideo(request: VideoRequest): Promise<MediaAsset[]> {
     const apiKey = this.config.apiKey?.trim();
     if (!apiKey) throw new Error("请填写 API Key");

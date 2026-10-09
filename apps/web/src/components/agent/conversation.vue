@@ -311,6 +311,9 @@ function applyEvent(event: AgentEvent) {
       });
       break;
     case "compaction": compacting.value = event.active; break;
+    case "compactionResult":
+      messages.value.push({ id: event.id, role: "assistant", content: event.content, parts: [{ id: event.id, type: "text", content: event.content }] });
+      break;
     case "session": emit("session", event.file); break;
     case "stats": stats.value = event.stats; contextUsage.value = event.contextUsage; break;
     default: stream.receive(event);

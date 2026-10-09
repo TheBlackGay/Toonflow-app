@@ -120,6 +120,9 @@ async function start() {
     event.response = { allow: false };
     requestQuit();
   });
+  Electrobun.events.on("application-menu-clicked", event => {
+    if (event.data.action === "toonflow.quit") requestQuit();
+  });
 
   try {
     // Windows 的 data 与 app 同级；macOS 的 data 与 .app 同级，避免随程序更新被替换。
@@ -142,7 +145,7 @@ async function start() {
           { role: "hideOthers" },
           { role: "showAll" },
           { type: "separator" },
-          { role: "quit" },
+          { action: "toonflow.quit", accelerator: "CommandOrControl+Q" },
         ] },
         { label: t`编辑`, submenu: [
           { role: "undo", label: t`撤销` },

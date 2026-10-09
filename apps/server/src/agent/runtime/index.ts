@@ -370,7 +370,8 @@ export async function run(
       }
       send({ type: "session", file: basename(history.getSessionFile()!) });
       if (prompt.trim() === "/compact") {
-        await session.compact();
+        const result = await session.compact();
+        send({ type: "compactionResult", id: crypto.randomUUID(), content: result.summary });
         return;
       }
       // ACT: 文本附件完整内容进入模型上下文，界面仍保存工作区引用；视频在请求时加载，图片由 read 按需读取。

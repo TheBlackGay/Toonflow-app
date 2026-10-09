@@ -141,7 +141,7 @@ export default {
 
 🔗 通过此 [注册链接](https://go.apimart.ai/gh-toonflow-app) 注册即可开用。`,
   rules,
-  models: [
+  models: [], /*
     {
       id: "seedance-2.5",
       label: "Seedance-2.5 (支持真人)",
@@ -199,7 +199,7 @@ export default {
     { id: "gpt-image-2", label: "gpt-image-2", type: "image", mode: ["text", "singleImage", "multiReference"] },
     { id: "gemini-3-pro-image-preview", label: "Nano banana Pro", type: "image", mode: ["text", "singleImage", "multiReference"] },
     { id: "gemini-3.1-flash-image-preview", label: "Nano banana2", type: "image", mode: ["text", "singleImage", "multiReference"] },
-  ] satisfies ProviderModel[],
+  ] satisfies ProviderModel[], */
   async generateImage(request: ImageRequest): Promise<MediaAsset[]> {
     const apiKey = this.config.apiKey?.trim();
     if (!apiKey) throw new Error("请填写 API Key");

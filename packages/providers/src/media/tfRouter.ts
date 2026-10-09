@@ -107,7 +107,7 @@ export default {
   protocol: "openai-completions",
   readme: "## Toonflow 官方中转平台\n\n提供文本、图像、视频、音频等多模态模型服务。\n\n[前往中转平台](https://api.toonflow.net/)",
   rules,
-  models: [
+  models: [], /*
     { id: "seed-audio-1.0", label: "Seed Audio 1.0", type: "audio" },
     {
       id: "Seedance 2.5",
@@ -199,7 +199,7 @@ export default {
       imageSizes: ["1K", "2K", "4K"],
       imageRatios: ["1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "21:9"],
     },
-  ] satisfies ProviderModel[],
+  ] satisfies ProviderModel[], */
   async generateAudio(request: AudioRequest): Promise<MediaAsset[]> {
     const text = (request.text ?? request.prompt ?? "").trim();
     if (!text) throw new Error("请输入音频生成文本");
