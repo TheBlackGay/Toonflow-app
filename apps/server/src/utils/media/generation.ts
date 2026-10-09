@@ -142,6 +142,7 @@ export async function generateMedia(
   const providerInfo = await getMediaProvider(request.providerId);
   const model = providerInfo.models.find(model => model.id === request.modelId && model.type === mediaType);
   if (!model) invalid("所选媒体模型不存在或类型不匹配，请重新选择");
+  const modelParameters = record(model.parameters);
   const configurations = record(conf.get("settings", {}).mediaProviderConfigs);
   const provider = await loadMediaProviderSource(providerInfo.source, record(configurations[providerInfo.id]), signal, undefined, directory);
   const generate = mediaType === "image" ? provider.generateImage : mediaType === "video" ? provider.generateVideo : provider.generateAudio;
@@ -157,9 +158,9 @@ export async function generateMedia(
       voice: request.voice, speed: request.speed, volume: request.volume, pitch: request.pitch, language: request.language, format: request.format, sampleRate: request.sampleRate,
     })
     : mediaType === "image"
-    ? await provider.generateImage!({ model: request.modelId, prompt: request.prompt, images, ratio: request.ratio, size: request.size })
+    ? await provider.generateImage!({ model: request.modelId, prompt: request.prompt, images, ratio: request.ratio, size: request.size, other: { modelParameters } })
     : await provider.generateVideo!({
-      model: request.modelId, prompt: request.prompt, images,
+      model: request.modelId, prompt: request.prompt, images, other: { modelParameters },
       videos: await references(request.videos, "video"), audios: await references(request.audios, "audio"),
       firstFrame: request.firstFrame ? await readReference(directory, request.firstFrame, "image", signal) : undefined,
       lastFrame: request.lastFrame ? await readReference(directory, request.lastFrame, "image", signal) : undefined,

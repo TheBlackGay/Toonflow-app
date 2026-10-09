@@ -140,10 +140,21 @@ const { generating } = generationState;
 let generation: Promise<void> | undefined;
 let modelsRequest: Promise<void> | undefined;
 const selectedModel = computed(() => models.value.find((item) => JSON.stringify([item.providerId, item.modelId]) === data.value.model));
-const sizeOptions = computed(() => (selectedModel.value?.imageSizes?.length ? selectedModel.value.imageSizes : ["2K"]));
+const allSizeOptions = computed(() => (selectedModel.value?.imageSizes?.length ? selectedModel.value.imageSizes : ["2K"]));
 const ratioOptions = computed(() => (selectedModel.value?.imageRatios?.length ? selectedModel.value.imageRatios : ["16:9"]));
+const sizeOptions = computed(() => {
+  const sizes = allSizeOptions.value;
+  const [ratioWidth, ratioHeight] = data.value.ratio.split(":").map(Number);
+  if (!ratioWidth || !ratioHeight) return sizes;
+  const matching = sizes.filter(size => {
+    const match = /^(\d+)x(\d+)$/i.exec(size);
+    if (!match) return false;
+    return Math.abs(Number(match[1]) / Number(match[2]) - ratioWidth / ratioHeight) < 0.01;
+  });
+  return matching.length ? matching : sizes;
+});
 watch(
-  selectedModel,
+  [selectedModel, () => data.value.ratio],
   (choice) => {
     if (!choice) return;
     // ACT: 现有分辨率使用 K 单位；出现其他单位时再统一换算，未知名称排在数值选项之后。

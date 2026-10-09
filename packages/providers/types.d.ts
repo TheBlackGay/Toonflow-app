@@ -21,6 +21,8 @@ interface ProviderModel {
   audio?: "optional" | boolean;
   imageSizes?: string[];
   imageRatios?: string[];
+  /** 模型专用供应商参数，由宿主通过 MediaRequest.other 传入。 */
+  parameters?: Record<string, unknown>;
   durationResolutionMap?: { duration: number[]; resolution: string[] }[];
   voices?: { title: string; voice: string }[];
 }

@@ -8,10 +8,6 @@
       </el-button>
     </template>
     <div class="generationSettings nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @dblclick.stop @keydown.stop @wheel.stop>
-      <div class="sectionLabel">分辨率</div>
-      <el-radio-group v-model="size" class="sizeOptions" :disabled="disabled" aria-label="图片分辨率">
-        <el-radio-button v-for="item in sizes" :key="item" :value="item">{{ item }}</el-radio-button>
-      </el-radio-group>
       <div class="sectionLabel">比例</div>
       <div class="ratioOptions" role="group" aria-label="图片比例">
         <el-button
@@ -28,6 +24,10 @@
           </span>
         </el-button>
       </div>
+      <div class="sectionLabel sizeLabel">分辨率</div>
+      <el-radio-group v-model="size" class="sizeOptions" :disabled="disabled" aria-label="图片分辨率">
+        <el-radio-button v-for="item in sizes" :key="item" :value="item">{{ item }}</el-radio-button>
+      </el-radio-group>
     </div>
   </el-popover>
 </template>
@@ -72,7 +72,7 @@ function ratioStyle(value: string) {
   .sizeOptions {
     display: flex;
     gap: 8px;
-    margin-bottom: 14px;
+    flex-wrap: wrap;
     .el-radio-button {
       flex: 1;
       --el-radio-button-checked-bg-color: var(--el-fill-color);
@@ -94,6 +94,8 @@ function ratioStyle(value: string) {
       }
     }
   }
+
+  .sizeLabel { margin-top: 14px; }
 
   .ratioOptions {
     display: grid;

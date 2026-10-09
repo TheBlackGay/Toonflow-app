@@ -61,16 +61,32 @@ async function providerMetadata(fileName: string, source: string) {
 }
 
 function migrateDrawThingsSource(source: string) {
+  let migrated = source;
+  if (migrated.includes("const rules") && !migrated.includes("requestTimeoutMinutes")) {
+    migrated = migrated.replace("] as const;", `  {\n    type: "inputNumber",\n    field: "requestTimeoutMinutes" as const,\n    title: "请求超时（分钟）",\n    value: 10,\n    props: { min: 1, max: 1440, step: 1, stepStrictly: true },\n  },\n] as const;`);
+  }
+  if (migrated.includes("AbortSignal.timeout(30 * 60_000)")) {
+    migrated = migrated.replace(
+      "const signal = AbortSignal.any([AbortSignal.timeout(30 * 60_000), ...(context.signal ? [context.signal] : [])]);",
+      'const configuredTimeout = typeof context.config.requestTimeoutMinutes === "number" ? context.config.requestTimeoutMinutes : Number(context.config.requestTimeoutMinutes);\n  const timeout = Number.isInteger(configuredTimeout) && configuredTimeout >= 1 && configuredTimeout <= 1440 ? configuredTimeout * 60_000 : 10 * 60_000;\n  const timeoutSignal = AbortSignal.timeout(timeout);\n  const signal = AbortSignal.any([timeoutSignal, ...(context.signal ? [context.signal] : [])]);',
+    );
+  }
+  if (!source.includes('error.name === "TimeoutError"')) {
+    migrated = migrated.replace(
+      'throw new Error(`无法连接 Draw Things Local API：${error instanceof Error ? error.message : String(error)}`);',
+      'if (timeoutSignal.aborted) throw new Error(`Draw Things 请求超时（${timeout / 60_000} 分钟），请在媒体供应商配置中增加请求超时时间`);\n    if (context.signal?.aborted) throw error;\n    throw new Error(`无法连接 Draw Things Local API：${error instanceof Error ? error.message : String(error)}`);',
+    );
+  }
   const presetsStart = source.indexOf("const modelPresets");
   const presetsEnd = source.indexOf("};", presetsStart);
   const presets = presetsStart >= 0 && presetsEnd > presetsStart ? source.slice(presetsStart, presetsEnd) : "";
   if (!presets.includes('"qwen_image_2.1_i8x.ckpt"') && source.includes('"krea_2_turbo_i8x.ckpt"')) {
     const marker = '  "krea_2_turbo_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },';
     if (source.includes(marker)) {
-      return source.replace(marker, `${marker}\n  "qwen_image_2.1_i8x.ckpt": { type: "image", steps: 40, cfg: 1, parameters: { shift: 1 } },`);
+      migrated = migrated.replace(marker, `${marker}\n  "qwen_image_2.1_i8x.ckpt": { type: "image", steps: 40, cfg: 1, parameters: { shift: 1 } },`);
     }
   }
-  return source;
+  return migrated;
 }
 
 function invalid(message: string, status = 400): never {

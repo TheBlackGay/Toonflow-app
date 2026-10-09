@@ -26,7 +26,7 @@ const rules = [
   },
 ] as const;
 
-const version = "0.4.0";
+const version = "0.5.0";
 const defaultImageModel = "z_image_turbo_1.0_i8x.ckpt";
 const defaultVideoModel = "minimax_h3_ref2va_i6x.ckpt";
 
@@ -73,8 +73,13 @@ function extraParameters(value: unknown): Record<string, unknown> {
   }
 }
 
+function modelParameters(value: unknown): Record<string, unknown> {
+  return object(value);
+}
+
 function requestTimeoutMinutes(value: unknown) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 1440 ? value : 10;
+  const minutes = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isInteger(minutes) && minutes >= 1 && minutes <= 1440 ? minutes : 10;
 }
 
 function asset(value: unknown, mediaType: "image" | "video", mimeType: string): MediaAsset | undefined {
@@ -148,7 +153,8 @@ function getPreset(model: string, type: "image" | "video") {
 
 async function requestMedia(context: ProviderContext, baseUrl: string, path: string, body: Record<string, unknown>, mediaType: "image" | "video") {
   const timeout = requestTimeoutMinutes(context.config.requestTimeoutMinutes) * 60_000;
-  const signal = AbortSignal.any([AbortSignal.timeout(timeout), ...(context.signal ? [context.signal] : [])]);
+  const timeoutSignal = AbortSignal.timeout(timeout);
+  const signal = AbortSignal.any([timeoutSignal, ...(context.signal ? [context.signal] : [])]);
   let response: Response;
   try {
     response = await context.tool.fetch(`${baseUrl}${path}`, {
@@ -158,9 +164,10 @@ async function requestMedia(context: ProviderContext, baseUrl: string, path: str
       signal,
     });
   } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
+    if (timeoutSignal.aborted) {
       throw new Error(`Draw Things 请求超时（${timeout / 60_000} 分钟），请在媒体供应商配置中增加请求超时时间`);
     }
+    if (context.signal?.aborted) throw error;
     throw new Error(`无法连接 Draw Things Local API：${error instanceof Error ? error.message : String(error)}`);
   }
   if (!response.ok) throw new Error(`Draw Things ${mediaType === "image" ? "图片" : "视频"}请求失败：HTTP ${response.status}`);
@@ -178,7 +185,7 @@ export default {
   id: "drawThings",
   label: "Draw Things Local",
   version,
-  readme: "本机 Draw Things Local API 图片与视频供应商。请先开启 Local API Server。模型列表会从本机 Draw Things Models 目录筛选已配置模型，也可在媒体模型设置中切换；参数会按模型类型自动选择。额外请求参数填写 JSON 对象，例如 {\"seed\":123456}；这些参数会应用到该供应商的图片和视频请求。请求默认超时 10 分钟，可在编辑窗口调整，最长 24 小时。",
+  readme: "本机 Draw Things Local API 图片与视频供应商。请先开启 Local API Server。模型列表会从本机 Draw Things Models 目录筛选已配置模型，也可在媒体模型设置中切换；参数会按模型类型自动选择。供应商级额外请求参数填写 JSON 对象，例如 {\"seed\":123456}；编辑具体模型时，还可以在模型参数中配置该模型专用的 steps、seed、loras 等参数，模型参数优先于供应商级参数。请求默认超时 10 分钟，可在编辑窗口调整，最长 24 小时。",
   rules,
   models: [
     { id: "z_image_turbo_1.0_i8x.ckpt", label: "Z Image Turbo (本地)", type: "image", mode: ["text", "singleImage"] },
@@ -224,6 +231,7 @@ export default {
       negative_prompt: "", steps: preset.steps, guidance_scale: preset.cfg,
       ...preset.parameters,
       ...extraParameters(this.config.extraParameters),
+      ...modelParameters(request.other?.modelParameters),
       prompt: request.prompt, model, width: size.width, height: size.height, batch_size: 1,
     };
     if (request.images?.length) body.init_images = request.images.map(mediaUrl);
@@ -237,6 +245,7 @@ export default {
     const body: Record<string, unknown> = {
       negative_prompt: "", steps: preset.steps, cfg_scale: preset.cfg, num_frames: frameCount(request.duration, preset.fps ?? 24), fps: preset.fps ?? 24,
       ...extraParameters(this.config.extraParameters),
+      ...modelParameters(request.other?.modelParameters),
       prompt: request.prompt, model, width: size.width, height: size.height, batch_size: 1,
     };
     const firstFrame = request.firstFrame ?? request.images?.[0];

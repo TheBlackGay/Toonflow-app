@@ -76,6 +76,8 @@ async function start() {
   let isClosing = false;
   let server: Server | undefined;
   let closePromise: Promise<void> | undefined;
+  let quitRequested = false;
+  let quitApproved = false;
 
   async function closeBackend() {
     if (closePromise) return closePromise;
@@ -89,6 +91,35 @@ async function start() {
     })();
     return closePromise;
   }
+
+  function requestQuit() {
+    if (quitRequested) return;
+    quitRequested = true;
+    isClosing = true;
+    deliverInstall = undefined;
+    pendingInstalls.length = 0;
+    splash?.close();
+    splash = undefined;
+    void closeBackend()
+      .then(() => {
+        quitApproved = true;
+        Utils.quit();
+      })
+      .catch(error => {
+        console.error("关闭桌面服务失败：", error);
+        quitApproved = true;
+        Utils.quit(1);
+      });
+  }
+
+  Electrobun.events.on("before-quit", event => {
+    if (quitApproved) {
+      event.response = { allow: true };
+      return;
+    }
+    event.response = { allow: false };
+    requestQuit();
+  });
 
   try {
     // Windows 的 data 与 app 同级；macOS 的 data 与 .app 同级，避免随程序更新被替换。
@@ -277,17 +308,7 @@ async function start() {
       mainWindow.on("close", closeIcons);
     }
     mainWindow.on("close", () => {
-      isClosing = true;
-      deliverInstall = undefined;
-      pendingInstalls.length = 0;
-      splash?.close();
-      splash = undefined;
-      void closeBackend()
-        .then(() => Utils.quit())
-        .catch(error => {
-          console.error("关闭桌面服务失败：", error);
-          Utils.quit(1);
-        });
+      requestQuit();
     });
     if (process.platform === "win32") {
       // ACT: 运行信息随应用目录清理；启动器通过 PID 忽略已退出进程留下的端口。

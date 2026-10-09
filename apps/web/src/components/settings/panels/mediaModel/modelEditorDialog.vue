@@ -75,6 +75,12 @@
             </div>
           </el-form-item>
         </template>
+        <template v-if="providerId === 'drawThings' && (draft.type === 'image' || draft.type === 'video')">
+          <el-form-item label="Draw Things 模型参数（JSON）">
+            <el-input v-model="modelParameters" type="textarea" dir="ltr" :rows="5" resize="vertical" aria-label="Draw Things 模型参数" placeholder='{&quot;steps&quot;:40,&quot;seed&quot;:123456,&quot;loras&quot;:[{&quot;name&quot;:&quot;style.safetensors&quot;,&quot;weight&quot;:0.8}]}' />
+            <el-text type="info">可按模型固定采样步数、随机种子、LoRA 等 Draw Things API 参数；模型参数优先于供应商级额外参数。</el-text>
+          </el-form-item>
+        </template>
         <details class="modelOptions">
           <summary>更多配置（JSON）</summary>
           <el-input v-model="options" type="textarea" dir="ltr" :rows="6" resize="vertical" aria-label="模型的更多配置" />
@@ -94,7 +100,7 @@ import { ref, watch } from "vue";
 import { IconArrowRight, IconPlus, IconTrash } from "@tabler/icons-vue";
 import type { MediaProviderModel } from "./types";
 
-const { model, models } = defineProps<{ model?: MediaProviderModel; models: MediaProviderModel[] }>();
+const { model, models, providerId } = defineProps<{ model?: MediaProviderModel; models: MediaProviderModel[]; providerId?: string }>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ confirmed: [model: MediaProviderModel] }>();
 const modelTypes = [
@@ -122,6 +128,7 @@ const referenceModes = [
 ];
 const draft = ref(createDraft());
 const options = ref("{}");
+const modelParameters = ref("{}");
 const formError = ref("");
 let original: Record<string, unknown> = {};
 let initialDraft = createDraft();
@@ -177,6 +184,11 @@ watch(visible, (isVisible) => {
     delete extra.audio;
     delete extra.durationResolutionMap;
   }
+  if (providerId === "drawThings" && (draft.value.type === "image" || draft.value.type === "video")) {
+    const configuredParameters = extra.parameters;
+    modelParameters.value = configuredParameters && typeof configuredParameters === "object" && !Array.isArray(configuredParameters) ? JSON.stringify(configuredParameters, null, 2) : "{}";
+    delete extra.parameters;
+  }
   options.value = JSON.stringify(extra, null, 2);
   initialDraft = JSON.parse(JSON.stringify(draft.value));
   initialExtraMode = extra.mode;
@@ -193,6 +205,13 @@ function confirmModel() {
     try { extra = JSON.parse(options.value); }
     catch { throw new Error("更多配置不是有效的 JSON"); }
     if (!extra || typeof extra !== "object" || Array.isArray(extra)) throw new Error("更多配置必须是 JSON 对象");
+    if (providerId === "drawThings" && (draft.value.type === "image" || draft.value.type === "video")) {
+      let parameters: unknown;
+      try { parameters = JSON.parse(modelParameters.value); }
+      catch { throw new Error("Draw Things 模型参数不是有效的 JSON"); }
+      if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) throw new Error("Draw Things 模型参数必须是 JSON 对象");
+      if (Object.keys(parameters).length) extra.parameters = parameters;
+    }
     const fields = ["id", "label", "type", ...(draft.value.type === "video" ? ["audio", "durationResolutionMap"] : [])];
     if (fields.some(field => field in extra)) throw new Error("已有表单项请直接在上方编辑");
     const value: MediaProviderModel = { ...extra, id, label, type: draft.value.type };

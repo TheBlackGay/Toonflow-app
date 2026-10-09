@@ -74,6 +74,7 @@
       v-model="modelEditorVisible"
       :model="editingModelIndex === undefined ? undefined : models[editingModelIndex]"
       :models="models"
+      :providerId="provider?.id"
       @confirmed="confirmModel" />
   </el-dialog>
 </template>
