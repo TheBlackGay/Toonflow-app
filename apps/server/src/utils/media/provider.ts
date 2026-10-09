@@ -1,10 +1,12 @@
 import { t, translateMessage, validationOptions } from "@/lib/i18n";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, unlink } from "@toonflow/file";
+import { lstat, mkdir, readFile, readdir, unlink, type Dirent } from "@toonflow/file";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createContext, SourceTextModule } from "node:vm";
 import type { AudioConvertOptions, Provider, ProviderTools } from "@toonflow/providers";
 import tfRouter from "@toonflow/providers/media/tfRouter";
+import drawThings from "@toonflow/providers/media/drawThings";
 import { parse, parseExpression } from "@babel/parser";
 import { z } from "zod";
 import conf from "@/utils/conf";
@@ -25,6 +27,51 @@ export const mediaModelsSchema = z.array(z.object({
   label: z.string().min(1).max(200).refine(value => !!value.trim()),
   type: z.enum(["text", "image", "video", "audio"]),
 }).catchall(z.json())).max(2000).refine(models => new Set(models.map(model => model.id)).size === models.length, "模型 ID 不能重复");
+
+function drawThingsModelsDirectory() {
+  const configured = process.env.TOONFLOW_DRAW_THINGS_MODELS_DIR?.trim();
+  if (configured) return configured;
+  return process.platform === "darwin"
+    ? join(homedir(), "Library/Containers/com.liuliu.draw-things/Data/Documents/Models")
+    : undefined;
+}
+
+async function discoverDrawThingsModels(models: z.infer<typeof mediaModelsSchema>) {
+  const directory = drawThingsModelsDirectory();
+  if (!directory) return models;
+  let entries: Dirent[];
+  try {
+    entries = await readdir(directory, { withFileTypes: true }) as Dirent[];
+  } catch { return models; }
+  const installed = new Set(entries
+    .filter(entry => entry.isFile() && /\.(?:ckpt|safetensors)$/i.test(entry.name))
+    .map(entry => entry.name));
+  // ACT: 只同步 Provider 已配置参数的模型，避免把 LoRA、VAE 或未知主模型放进可生成下拉框。
+  const known = new Map(models.map(model => [model.id, model]));
+  return [...known.values()].filter(model => installed.has(model.id));
+}
+
+export async function listDrawThingsModels() {
+  return discoverDrawThingsModels(mediaModelsSchema.parse(drawThings.models));
+}
+
+async function providerMetadata(fileName: string, source: string) {
+  const result = metadata(fileName, source);
+  return result.id === "drawThings" ? { ...result, models: await discoverDrawThingsModels(result.models) } : result;
+}
+
+function migrateDrawThingsSource(source: string) {
+  const presetsStart = source.indexOf("const modelPresets");
+  const presetsEnd = source.indexOf("};", presetsStart);
+  const presets = presetsStart >= 0 && presetsEnd > presetsStart ? source.slice(presetsStart, presetsEnd) : "";
+  if (!presets.includes('"qwen_image_2.1_i8x.ckpt"') && source.includes('"krea_2_turbo_i8x.ckpt"')) {
+    const marker = '  "krea_2_turbo_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },';
+    if (source.includes(marker)) {
+      return source.replace(marker, `${marker}\n  "qwen_image_2.1_i8x.ckpt": { type: "image", steps: 40, cfg: 1, parameters: { shift: 1 } },`);
+    }
+  }
+  return source;
+}
 
 function invalid(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
@@ -213,7 +260,7 @@ export async function getMediaProvider(id: string) {
     if (error.code === "ENOENT") invalid("请先在媒体模型设置中添加供应商", 404);
     throw error;
   });
-  return { ...metadata(current.fileName, current.source), source: current.source };
+  return { ...(await providerMetadata(current.fileName, current.source)), source: current.source };
 }
 
 export async function listMediaProviders() {
@@ -225,7 +272,7 @@ export async function listMediaProviders() {
       let current = { fileName: file.name, id: file.name.slice(0, -3), source: "", revision: "" };
       try {
         current = await readProvider(path, file.name);
-        return metadata(current.fileName, current.source);
+        return providerMetadata(current.fileName, current.source);
       } catch (error) {
         // ACT: 元数据损坏不影响其他供应商；仍保留原文版本，允许用户明确删除。
         const { source, ...file } = current;
@@ -237,7 +284,7 @@ export async function listMediaProviders() {
 export async function addMediaProvider(source: string) {
   const { id } = parseProvider(source);
   const fileName = `${id}.ts`;
-  const result = metadata(fileName, source);
+  const result = await providerMetadata(fileName, source);
   const path = join((await directory(true))!, fileName);
   const release = lockWorkspaceFiles([path]);
   try { await writeWorkspaceFile(path, source, true); }
@@ -327,14 +374,16 @@ export async function deleteMediaProvider(fileName: string, revision: string) {
 
 export async function loadMediaProviderSource(source: string, config: Record<string, unknown> = {}, signal?: AbortSignal, fetchRequest = fetch, cwd?: string) {
   signal?.throwIfAborted();
-  const { id } = parseProvider(source);
+  const parsedSource = parseProvider(source);
+  const migratedSource = parsedSource.id === "drawThings" ? migrateDrawThingsSource(source) : source;
+  const { id } = parsedSource;
   // ACT: VM 只隔离可信供应商的全局上下文；不可信代码需要独立进程等更强隔离。
   const context = createContext({
     Buffer, URL, URLSearchParams, TextEncoder, TextDecoder, Blob,
     AbortController, AbortSignal, setTimeout, clearTimeout,
   }, { codeGeneration: { strings: false, wasm: false } });
   const rejectImport = () => { throw new Error("供应商不能导入模块，请使用 this.tool 中的宿主工具"); };
-  const module = new SourceTextModule(providerTranspiler.transformSync(source), {
+  const module = new SourceTextModule(providerTranspiler.transformSync(migratedSource), {
     context,
     identifier: `${id}.ts`,
     importModuleDynamically: rejectImport,
