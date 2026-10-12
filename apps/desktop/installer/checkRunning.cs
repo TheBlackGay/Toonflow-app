@@ -56,40 +56,54 @@ internal static class checkRunning
             foreach (string file in Directory.EnumerateFiles(appDirectory, "*.exe", SearchOption.AllDirectories))
                 processNames.Add(Path.GetFileNameWithoutExtension(file));
 
-            foreach (string processName in processNames)
+            // NSIS 外层检查超时为 15 秒，预留进程启动与输出的余量。
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (true)
             {
-                foreach (Process process in Process.GetProcessesByName(processName))
+                string running = null;
+                foreach (string processName in processNames)
                 {
-                    using (process)
+                    foreach (Process process in Process.GetProcessesByName(processName))
                     {
-                        IntPtr handle = openProcess(0x1000, false, process.Id);
-                        if (handle == IntPtr.Zero)
+                        using (process)
                         {
-                            int errorCode = Marshal.GetLastWin32Error();
-                            if (errorCode == 87) continue; // 进程在枚举后已退出。
-                            throw new Win32Exception(errorCode, "Cannot inspect " + processName + " (PID " + process.Id + ").");
-                        }
-                        try
-                        {
-                            StringBuilder imagePath = new StringBuilder(32768);
-                            uint size = (uint)imagePath.Capacity;
-                            if (!queryProcessImageName(handle, 0, imagePath, ref size))
+                            IntPtr handle = openProcess(0x1000, false, process.Id);
+                            if (handle == IntPtr.Zero)
                             {
                                 int errorCode = Marshal.GetLastWin32Error();
-                                if (process.HasExited) continue;
-                                throw new Win32Exception(errorCode);
+                                if (errorCode == 87) continue; // 进程在枚举后已退出。
+                                throw new Win32Exception(errorCode, "Cannot inspect " + processName + " (PID " + process.Id + ").");
                             }
-                            if (getFinalPath(imagePath.ToString()).StartsWith(appPrefix, StringComparison.OrdinalIgnoreCase))
+                            try
                             {
-                                Console.WriteLine(processName + " (PID " + process.Id + ")");
-                                return 1;
+                                StringBuilder imagePath = new StringBuilder(32768);
+                                uint size = (uint)imagePath.Capacity;
+                                if (!queryProcessImageName(handle, 0, imagePath, ref size))
+                                {
+                                    int errorCode = Marshal.GetLastWin32Error();
+                                    if (process.HasExited) continue;
+                                    throw new Win32Exception(errorCode);
+                                }
+                                if (getFinalPath(imagePath.ToString()).StartsWith(appPrefix, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    running = processName + " (PID " + process.Id + ")";
+                                    break;
+                                }
                             }
+                            finally { closeHandle(handle); }
                         }
-                        finally { closeHandle(handle); }
                     }
+                    if (running != null) break;
                 }
+                if (running == null) return 0;
+                if (DateTime.UtcNow >= deadline)
+                {
+                    Console.WriteLine(running);
+                    return 1;
+                }
+                // 关闭窗口后宿主和渲染进程可能需要几秒钟释放应用文件，给它们一个有界退出窗口。
+                System.Threading.Thread.Sleep(250);
             }
-            return 0;
         }
         catch (Exception error)
         {

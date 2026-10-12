@@ -34,9 +34,14 @@ function allowedHost(req: Request) {
   return !local || ["localhost", "127.0.0.1", "[::1]"].includes(req.hostname);
 }
 
-export function getAppOrigin(req: Request) {
+export function getAppOrigin(req: Request, allowMissingSource = false) {
   const source = req.get("origin") ?? req.get("referer");
-  if (!source || !allowedHost(req)) throw Object.assign(new Error("只允许 Toonflow 页面访问控制连接"), { status: 403 });
+  if (!allowedHost(req)) throw Object.assign(new Error("只允许 Toonflow 页面访问控制连接"), { status: 403 });
+  // 原生 WebView 的部分 GET/SSE 请求不会携带 Origin 或 Referer；仅允许明确标记的桌面接口回退到当前服务地址。
+  if (!source) {
+    if (process.env.toonflowDesktop === "1" && (allowMissingSource || req.get("x-toonflow-workspace") === "1")) return `http://${req.get("host")}`;
+    throw Object.assign(new Error("只允许 Toonflow 页面访问控制连接"), { status: 403 });
+  }
   let url: URL;
   try { url = new URL(source); }
   catch { throw Object.assign(new Error("页面来源无效"), { status: 403 }); }

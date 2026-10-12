@@ -96,7 +96,7 @@ onBeforeUnmount(() => {
 async function loadProviders() {
   const request = ++loadRequest;
   try {
-    const { data } = await axios.get<{ data: MediaProvider[] }>("/api/providers/media/list");
+    const { data } = await axios.get<{ data: MediaProvider[] }>("/api/providers/media/list", { headers: { "x-toonflow-workspace": "1" } });
     if (request === loadRequest) providers.value = data.data;
   } catch (error) {
     if (request === loadRequest) ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.message || error.message : "读取媒体供应商失败");
@@ -124,7 +124,7 @@ async function fetchModels(provider: MediaProvider) {
   try {
     const { data } = await axios.post<{ code: number; data: MediaProvider; message: string }>("/api/providers/media/models", {
       fileName: provider.fileName, revision: provider.revision,
-    }, { timeout: 35000 });
+    }, { timeout: 35000, headers: { "x-toonflow-workspace": "1" } });
     if (data.code !== 200 || !data.data) throw new Error(data.message || "获取模型失败");
     saveProviderItem(data.data);
     invalidateNodeModels("media");
@@ -139,7 +139,7 @@ async function deleteProvider(provider: MediaProvider) {
   deletingFile.value = provider.fileName;
   let deleted = false;
   try {
-    await axios.delete("/api/providers/media/delete", { data: { fileName: provider.fileName, revision: provider.revision } });
+    await axios.delete("/api/providers/media/delete", { data: { fileName: provider.fileName, revision: provider.revision }, headers: { "x-toonflow-workspace": "1" } });
     deleted = true;
     loadRequest++;
     invalidateNodeModels("media");

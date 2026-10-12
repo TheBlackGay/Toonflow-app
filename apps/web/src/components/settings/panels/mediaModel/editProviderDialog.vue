@@ -12,16 +12,17 @@
     <div class="providerEditor">
       <messageMarkdown v-if="provider?.readme" class="providerReadme" :content="provider.readme" />
       <el-form labelPosition="top" :disabled="saving">
-        <el-form-item v-if="provider?.id !== 'drawThings'" label="API Key">
+        <el-form-item v-if="hasApiKeyRule" label="API Key">
           <el-input v-model="apiKey" :prefixIcon="IconKey" type="password" dir="ltr" showPassword autocomplete="off" aria-label="媒体供应商 API Key" />
         </el-form-item>
         <el-form-item v-if="provider?.id === 'drawThings'" label="Draw Things 地址">
           <el-input v-model="baseUrl" dir="ltr" placeholder="http://127.0.0.1:7888" aria-label="Draw Things 地址" />
+          <el-button class="connectionButton" :icon="IconRefresh" :loading="testingConnection" :disabled="saving" @click="testConnection">测试连接</el-button>
         </el-form-item>
         <el-form-item v-if="provider?.id === 'drawThings'">
           <template #label>
             <span class="fieldLabel">额外请求参数</span>
-            <el-tooltip content="填写 JSON 对象，会合并到 Draw Things 的图片和视频请求中。例如 {&quot;seed&quot;:123456,&quot;negative_prompt&quot;:&quot;low quality&quot;}。prompt、model、width、height 和 batch_size 由 Toonflow 控制。" placement="top" :showArrow="false">
+            <el-tooltip content="填写 JSON 对象，会合并到 Draw Things 的图片请求中。例如 {&quot;seed&quot;:123456,&quot;negative_prompt&quot;:&quot;low quality&quot;}。prompt、model、width、height 和 batch_size 由 Toonflow 控制。" placement="top" :showArrow="false">
               <icon-help class="fieldHelp" :size="16" aria-label="额外请求参数说明" />
             </el-tooltip>
           </template>
@@ -30,13 +31,14 @@
         <el-form-item v-if="provider?.id === 'drawThings'">
           <template #label>
             <span class="fieldLabel">请求超时（分钟）</span>
-            <el-tooltip content="Draw Things 单次图片或视频请求的最长等待时间，默认 10 分钟，范围 1 分钟到 24 小时。" placement="top" :showArrow="false">
+            <el-tooltip content="Draw Things 单次图片请求的最长等待时间，默认 10 分钟，范围 1 分钟到 24 小时。" placement="top" :showArrow="false">
               <icon-help class="fieldHelp" :size="16" aria-label="请求超时说明" />
             </el-tooltip>
           </template>
           <el-input-number v-model="requestTimeoutMinutes" :min="1" :max="1440" :step="1" controlsPosition="right" aria-label="Draw Things 请求超时时间" />
         </el-form-item>
       </el-form>
+      <form-create v-if="customRules.length" v-model="customFormValues" v-model:api="customFormApi" :rule="customRules" :option="formOptions" />
       <div class="modelHeader">
         <h4>模型配置 <el-text type="info">{{ models.length }}</el-text></h4>
         <el-button :icon="IconPlus" size="small" :disabled="saving" @click="editModel()">手动添加</el-button>
@@ -83,12 +85,15 @@
 import { translate } from "@toonflow/i18n/vue";
 
 import axios from "axios";
-import { defineAsyncComponent, ref, shallowRef, watch, type Component } from "vue";
-import { IconPlus, IconTrash, IconDeviceFloppy, IconEdit, IconKey, IconHelp } from "@tabler/icons-vue";
+import { computed, defineAsyncComponent, ref, shallowRef, watch, type Component } from "vue";
+import { IconPlus, IconTrash, IconDeviceFloppy, IconEdit, IconKey, IconHelp, IconRefresh } from "@tabler/icons-vue";
+import { ElMessage } from "element-plus";
+import formCreate, { type Api, type Options } from "../../formCreate";
 import { modelIcon } from "@toonflow/model-icons";
+import { validateDrawThingsParameters } from "@toonflow/providers/media/drawThings";
 import messageMarkdown from "@/components/messageMarkdown.vue";
 import type { MediaProvider, MediaProviderModel } from "./types";
-import { settings, saveSettings } from "@/stores/settings";
+import { reloadSettings, settings } from "@/stores/settings";
 import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
 
 const { provider } = defineProps<{ provider?: MediaProvider }>();
@@ -99,10 +104,13 @@ const models = ref<MediaProviderModel[]>([]);
 const modelEditorVisible = ref(false);
 const editingModelIndex = ref<number>();
 const saving = ref(false);
+const testingConnection = ref(false);
 const apiKey = ref("");
 const baseUrl = ref("");
 const extraParameters = ref("");
 const requestTimeoutMinutes = ref(10);
+const customFormApi = shallowRef<Api>();
+const customFormValues = ref<Record<string, unknown>>({});
 const revision = ref("");
 const formError = ref("");
 const modelTypes = { get image() { return translate("图片"); }, get video() { return translate("视频"); }, get audio() { return translate("音频"); }, get text() { return translate("文本"); } };
@@ -111,13 +119,18 @@ const modeLabels: Record<string, string> = {
   endFrameOptional: "尾帧可选", startFrameOptional: "首帧可选",
   imageReference: "图片参考", videoReference: "视频参考", audioReference: "音频参考",
 };
+const builtInFields = computed(() => new Set(["apiKey", ...(provider?.id === "drawThings" ? ["baseUrl", "extraParameters", "requestTimeoutMinutes"] : [])]));
+const hasApiKeyRule = computed(() => provider?.rules ? provider.rules.some(rule => rule.field === "apiKey") : provider?.id !== "drawThings");
+const customRules = computed(() => formCreate.copyRules((provider?.rules ?? []).filter(rule => !builtInFields.value.has(rule.field))));
+const formOptions = computed<Options>(() => ({ form: { labelPosition: "top", disabled: saving.value }, submitBtn: false, resetBtn: false }));
 
 watch(visible, isVisible => {
   if (!isVisible) return;
   formError.value = "";
   modelEditorVisible.value = false;
   editingModelIndex.value = undefined;
-  const configs = settings.value.mediaProviderConfigs as Record<string, { apiKey?: unknown; baseUrl?: unknown; extraParameters?: unknown; requestTimeoutMinutes?: unknown }> | undefined;
+  customFormApi.value = undefined;
+  const configs = settings.value.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
   const configuredKey = provider && configs?.[provider.id]?.apiKey;
   apiKey.value = typeof configuredKey === "string" ? configuredKey : "";
   const configuredBaseUrl = provider && configs?.[provider.id]?.baseUrl;
@@ -126,6 +139,10 @@ watch(visible, isVisible => {
   extraParameters.value = typeof configuredExtraParameters === "string" ? configuredExtraParameters : "";
   const configuredRequestTimeout = provider && configs?.[provider.id]?.requestTimeoutMinutes;
   requestTimeoutMinutes.value = typeof configuredRequestTimeout === "number" && Number.isInteger(configuredRequestTimeout) && configuredRequestTimeout >= 1 && configuredRequestTimeout <= 1440 ? configuredRequestTimeout : 10;
+  const currentConfig = provider && configs?.[provider.id];
+  customFormValues.value = Object.fromEntries((provider?.rules ?? [])
+    .filter(rule => !builtInFields.value.has(rule.field))
+    .map(rule => [rule.field, currentConfig?.[rule.field] ?? rule.value]));
   revision.value = provider?.revision ?? "";
   models.value = JSON.parse(JSON.stringify(provider?.models ?? []));
 }, { immediate: true });
@@ -151,6 +168,26 @@ function confirmModel(model: MediaProviderModel) {
   else models.value.splice(index, 1, model);
 }
 
+async function testConnection() {
+  if (testingConnection.value || provider?.id !== "drawThings") return;
+  testingConnection.value = true;
+  formError.value = "";
+  try {
+    const value = baseUrl.value.trim();
+    const { data } = await axios.get<{ code: number; data: { reachable: boolean; message?: string }; message?: string }>("/api/providers/media/health", {
+      params: { providerId: "drawThings", ...(value ? { baseUrl: value } : {}) },
+      headers: { "x-toonflow-workspace": "1" },
+    });
+    if (data.code !== 200 || !data.data?.reachable) throw new Error(data.data?.message || data.message || "连接测试失败");
+    ElMessage.success(data.data.message || "Draw Things 已连接");
+  } catch (error) {
+    const message = axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "连接测试失败";
+    ElMessage.error(message);
+  } finally {
+    testingConnection.value = false;
+  }
+}
+
 async function saveModels() {
   if (saving.value || !provider) return;
   const { id: providerId, fileName } = provider;
@@ -168,35 +205,41 @@ async function saveModels() {
       return { ...item, id, label };
     });
     if (apiKey.value.length > 8192) throw new Error("API Key 过长");
-    if (providerId === "drawThings" && (!baseUrl.value.trim() || !/^https?:\/\//i.test(baseUrl.value.trim()))) throw new Error("Draw Things 地址必须是 HTTP/HTTPS 地址");
+    if (providerId === "drawThings") {
+      let url: URL;
+      try { url = new URL(baseUrl.value.trim()); }
+      catch { throw new Error("Draw Things 地址无效"); }
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new Error("Draw Things 地址必须是无凭据或片段的 HTTP/HTTPS 地址");
+    }
     if (providerId === "drawThings" && extraParameters.value.trim()) {
       const parsed = JSON.parse(extraParameters.value) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Draw Things 额外请求参数必须是 JSON 对象");
+      validateDrawThingsParameters(parsed);
       if (extraParameters.value.length > 100000) throw new Error("Draw Things 额外请求参数过长");
     }
     if (providerId === "drawThings" && (!Number.isInteger(requestTimeoutMinutes.value) || requestTimeoutMinutes.value < 1 || requestTimeoutMinutes.value > 1440)) throw new Error("Draw Things 请求超时时间必须是 1 到 1440 分钟的整数（最长 24 小时）");
     saving.value = true;
+    if (customFormApi.value && !(await customFormApi.value.validate().catch(() => false))) return;
     const nextKey = apiKey.value.trim();
+    const customValues = customFormApi.value?.formData() ?? customFormValues.value;
+    const configs = settings.value.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
+    if (configs !== undefined && (!configs || typeof configs !== "object" || Array.isArray(configs))) throw new Error("媒体供应商配置格式无效");
+    const current = configs?.[providerId];
+    if (current !== undefined && (!current || typeof current !== "object" || Array.isArray(current))) throw new Error("当前供应商配置格式无效");
+    const nextBaseUrl = providerId === "drawThings" ? baseUrl.value.trim().replace(/\/$/, "") : undefined;
+    const nextExtraParameters = providerId === "drawThings" ? extraParameters.value.trim() : undefined;
+    const nextRequestTimeout = providerId === "drawThings" ? requestTimeoutMinutes.value : undefined;
+    const nextConfig = { ...current, ...customValues, ...(hasApiKeyRule.value ? { apiKey: nextKey } : {}), ...(providerId === "drawThings" ? { baseUrl: nextBaseUrl, extraParameters: nextExtraParameters, requestTimeoutMinutes: nextRequestTimeout } : {}) };
+    const configChanged = JSON.stringify(current ?? {}) !== JSON.stringify(nextConfig);
     const { data } = await axios.put<{ code: number; data: MediaProvider; message?: string }>("/api/providers/media/save", {
-      fileName, revision: revision.value, models: values,
-    });
+      fileName, revision: revision.value, models: values, ...(configChanged ? { config: nextConfig } : {}),
+    }, { headers: { "x-toonflow-workspace": "1" } });
     if (data.code !== 200 || !data.data) throw new Error(data.message || "保存模型失败");
     revision.value = data.data.revision;
     modelsSaved = true;
-    invalidateNodeModels("media");
-    await saveSettings(settings => {
-      const configs = settings.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
-      if (configs !== undefined && (!configs || typeof configs !== "object" || Array.isArray(configs))) throw new Error("媒体供应商配置格式无效");
-      const current = configs?.[providerId];
-      if (current !== undefined && (!current || typeof current !== "object" || Array.isArray(current))) throw new Error("当前供应商配置格式无效");
-      const nextBaseUrl = providerId === "drawThings" ? baseUrl.value.trim().replace(/\/$/, "") : undefined;
-      const nextExtraParameters = providerId === "drawThings" ? extraParameters.value.trim() : undefined;
-      const nextRequestTimeout = providerId === "drawThings" ? requestTimeoutMinutes.value : undefined;
-      if (nextKey === (current?.apiKey ?? "") && (providerId !== "drawThings" || nextBaseUrl === (current?.baseUrl ?? "") && nextExtraParameters === (current?.extraParameters ?? "") && nextRequestTimeout === (current?.requestTimeoutMinutes ?? 10))) return;
-      return { mediaProviderConfigs: { ...configs, [providerId]: { ...current, apiKey: nextKey, ...(providerId === "drawThings" ? { baseUrl: nextBaseUrl, extraParameters: nextExtraParameters, requestTimeoutMinutes: nextRequestTimeout } : {}) } } };
-    });
     configSaved = true;
-    const response = await axios.get<{ code: number; data: MediaProvider[]; message?: string }>("/api/providers/media/list");
+    await reloadSettings();
+    invalidateNodeModels("media");
+    const response = await axios.get<{ code: number; data: MediaProvider[]; message?: string }>("/api/providers/media/list", { headers: { "x-toonflow-workspace": "1" } });
     if (response.data.code !== 200 || !Array.isArray(response.data.data)) throw new Error(response.data.message || "读取最新模型失败");
     const latest = response.data.data.find(item => item.fileName === fileName);
     if (!latest) throw new Error("供应商已不存在");
@@ -224,6 +267,10 @@ async function saveModels() {
 
   .fieldLabel {
     margin-right: 6px;
+  }
+
+  .connectionButton {
+    margin-top: 8px;
   }
 
   .fieldHelp {

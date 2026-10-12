@@ -143,11 +143,11 @@ async function configureProviders() {
   const request = new AbortController();
   loginRequest = request;
   try {
-    const mediaResponse = await axios.get<{ code: number; data: MediaProvider[] }>("/api/providers/media/list", { signal: request.signal });
+    const mediaResponse = await axios.get<{ code: number; data: MediaProvider[] }>("/api/providers/media/list", { signal: request.signal, headers: { "x-toonflow-workspace": "1" } });
     if (mediaResponse.data.code !== 200 || !Array.isArray(mediaResponse.data.data)) throw new Error("读取媒体供应商失败，请重试配置");
     request.signal.throwIfAborted();
     if (!mediaResponse.data.data.some((provider) => provider.id === tfRouter.id)) {
-      await axios.post("/api/providers/media/add", { source: tfRouterSource }, { signal: request.signal });
+      await axios.post("/api/providers/media/add", { source: tfRouterSource }, { signal: request.signal, headers: { "x-toonflow-workspace": "1" } });
     }
     request.signal.throwIfAborted();
     // ACT: 媒体文件已安装但保存失败时保留文件，重试通过列表复用，不覆盖用户编辑的模型。

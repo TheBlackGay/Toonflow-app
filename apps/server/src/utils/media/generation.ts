@@ -15,6 +15,8 @@ const mediaExtensions: Record<string, string> = {
   "audio/mpeg": "mp3", "audio/wav": "wav", "audio/ogg": "ogg", "audio/webm": "webm",
   "audio/flac": "flac", "audio/aac": "aac", "audio/mp4": "m4a", "audio/opus": "opus", "audio/pcm": "pcm",
 };
+const imageRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"];
+const imageSizes = ["1K", "2K", "4K"];
 
 function invalid(message: string): never {
   throw Object.assign(new Error(message), { status: 400 });
@@ -25,24 +27,37 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function imageOptions(value: unknown, pattern: RegExp) {
-  return Array.isArray(value) ? [...new Set(value.filter((item): item is string => typeof item === "string" && item.length <= 64 && item === item.trim() && pattern.test(item)))] : undefined;
+  if (!Array.isArray(value)) return undefined;
+  const options = [...new Set(value.filter((item): item is string => typeof item === "string" && item.length <= 64 && item === item.trim() && pattern.test(item)))];
+  return options.length ? options : undefined;
 }
 
 export async function listMediaModels(): Promise<MediaModel[]> {
   const installedProviders = await listMediaProviders();
-  return installedProviders.flatMap(provider => provider.models.flatMap(model => {
+  return (await Promise.all(installedProviders.map(async provider => {
+    let capabilities: Provider | undefined;
+    try {
+      const info = await getMediaProvider(provider.id);
+      capabilities = await loadMediaProviderSource(info.source, {});
+    } catch {
+      return [] as MediaModel[];
+    }
+    return provider.models.flatMap(model => {
     if (model.type !== "image" && model.type !== "video" && model.type !== "audio") return [];
+    const generate = model.type === "image" ? capabilities?.generateImage : model.type === "video" ? capabilities?.generateVideo : capabilities?.generateAudio;
+    if (typeof generate !== "function") return [];
     const builtIn = (mediaProviders as readonly Provider[]).find(item => item.id === provider.id)?.models.find(item => item.id === model.id);
     return [{
       providerId: provider.id, providerLabel: provider.label, modelId: model.id, label: model.label, type: model.type,
       mode: model.mode, durationResolutionMap: model.durationResolutionMap, audio: model.audio,
       ...(model.type === "audio" ? { voices: model.voices } : {}),
       ...(model.type === "image" ? {
-        imageSizes: imageOptions(Array.isArray(model.imageSizes) ? model.imageSizes : builtIn?.imageSizes, /^[^\u0000-\u001f\u007f]+$/),
-        imageRatios: imageOptions(Array.isArray(model.imageRatios) ? model.imageRatios : builtIn?.imageRatios, /^[1-9]\d{0,3}:[1-9]\d{0,3}$/),
+        imageSizes: imageOptions(model.imageSizes, /^[^\u0000-\u001f\u007f]+$/) ?? imageOptions(builtIn?.imageSizes, /^[^\u0000-\u001f\u007f]+$/) ?? imageSizes,
+        imageRatios: imageOptions(model.imageRatios, /^[1-9]\d{0,3}:[1-9]\d{0,3}$/) ?? imageOptions(builtIn?.imageRatios, /^[1-9]\d{0,3}:[1-9]\d{0,3}$/) ?? imageRatios,
       } : {}),
     } as MediaModel];
-  }));
+    });
+  }))).flat();
 }
 
 function detectMimeType(bytes: Uint8Array, fallback: string) {

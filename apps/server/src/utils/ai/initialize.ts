@@ -39,7 +39,7 @@ async function refreshMediaModels(previousSettings: Record<string, unknown> | un
   if (!apiKey || (previousSettings && apiKey === normalizeApiKey(configs?.[tfRouterMedia.id]?.apiKey))) return;
   let provider: Awaited<ReturnType<typeof refreshMediaProviderModels>> | undefined;
   // ACT: 同一供应商文件按类型串行保存，避免两个刷新读取相同版本后互相冲突。
-  for (const type of ["video", "audio"] as const) {
+  for (const type of ["image", "video", "audio"] as const) {
     if (getMediaProviderApiKey(tfRouterMedia.id) !== apiKey) break;
     try { provider = await refreshMediaProviderModels(`${tfRouterMedia.id}.ts`, undefined, type, apiKey); }
     catch (error) {

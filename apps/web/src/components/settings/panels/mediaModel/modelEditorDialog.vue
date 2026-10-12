@@ -75,10 +75,10 @@
             </div>
           </el-form-item>
         </template>
-        <template v-if="providerId === 'drawThings' && (draft.type === 'image' || draft.type === 'video')">
+        <template v-if="providerId === 'drawThings' && draft.type === 'image'">
           <el-form-item label="Draw Things 模型参数（JSON）">
             <el-input v-model="modelParameters" type="textarea" dir="ltr" :rows="5" resize="vertical" aria-label="Draw Things 模型参数" placeholder='{&quot;steps&quot;:40,&quot;seed&quot;:123456,&quot;loras&quot;:[{&quot;name&quot;:&quot;style.safetensors&quot;,&quot;weight&quot;:0.8}]}' />
-            <el-text type="info">可按模型固定采样步数、随机种子、LoRA 等 Draw Things API 参数；模型参数优先于供应商级额外参数。</el-text>
+            <el-text type="info">支持 seed、steps、sampler、sampler_name、seed_mode、guidance_scale、cfg_scale、shift、tea_cache、denoising_strength、image_guidance、loras 等图片字段。图生图不能同时设置 guidance_scale 和 cfg_scale。模型参数优先于供应商级参数。</el-text>
           </el-form-item>
         </template>
         <details class="modelOptions">
@@ -99,15 +99,14 @@
 import { ref, watch } from "vue";
 import { IconArrowRight, IconPlus, IconTrash } from "@tabler/icons-vue";
 import type { MediaProviderModel } from "./types";
+import { validateDrawThingsModelId, validateDrawThingsParameters } from "@toonflow/providers/media/drawThings";
 
 const { model, models, providerId } = defineProps<{ model?: MediaProviderModel; models: MediaProviderModel[]; providerId?: string }>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ confirmed: [model: MediaProviderModel] }>();
-const modelTypes = [
-  { value: "image", label: "图片" },
-  { value: "video", label: "视频" },
-  { value: "audio", label: "音频" },
-];
+const modelTypes = providerId === "drawThings"
+  ? [{ value: "image", label: "图片" }]
+  : [{ value: "image", label: "图片" }, { value: "video", label: "视频" }, { value: "audio", label: "音频" }];
 const imageModes = [
   { value: "text", label: "文生图" },
   { value: "singleImage", label: "单图参考" },
@@ -184,7 +183,7 @@ watch(visible, (isVisible) => {
     delete extra.audio;
     delete extra.durationResolutionMap;
   }
-  if (providerId === "drawThings" && (draft.value.type === "image" || draft.value.type === "video")) {
+  if (providerId === "drawThings" && draft.value.type === "image") {
     const configuredParameters = extra.parameters;
     modelParameters.value = configuredParameters && typeof configuredParameters === "object" && !Array.isArray(configuredParameters) ? JSON.stringify(configuredParameters, null, 2) : "{}";
     delete extra.parameters;
@@ -201,16 +200,17 @@ function confirmModel() {
     const label = draft.value.label.trim();
     if (!label || !id) throw new Error("请填写显示名称和模型 ID");
     if (models.some(item => item !== model && item.id.trim() === id)) throw new Error(`模型 ID 已存在：${id}`);
+    if (providerId === "drawThings") validateDrawThingsModelId(id);
     let extra: Record<string, unknown>;
     try { extra = JSON.parse(options.value); }
     catch { throw new Error("更多配置不是有效的 JSON"); }
     if (!extra || typeof extra !== "object" || Array.isArray(extra)) throw new Error("更多配置必须是 JSON 对象");
-    if (providerId === "drawThings" && (draft.value.type === "image" || draft.value.type === "video")) {
+    if (providerId === "drawThings" && draft.value.type === "image") {
       let parameters: unknown;
       try { parameters = JSON.parse(modelParameters.value); }
       catch { throw new Error("Draw Things 模型参数不是有效的 JSON"); }
-      if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) throw new Error("Draw Things 模型参数必须是 JSON 对象");
-      if (Object.keys(parameters).length) extra.parameters = parameters;
+      const validatedParameters = validateDrawThingsParameters(parameters);
+      if (Object.keys(validatedParameters).length) extra.parameters = validatedParameters;
     }
     const fields = ["id", "label", "type", ...(draft.value.type === "video" ? ["audio", "durationResolutionMap"] : [])];
     if (fields.some(field => field in extra)) throw new Error("已有表单项请直接在上方编辑");

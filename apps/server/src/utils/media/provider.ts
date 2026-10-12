@@ -1,12 +1,12 @@
 import { t, translateMessage, validationOptions } from "@/lib/i18n";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, unlink, type Dirent } from "@toonflow/file";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { createContext, SourceTextModule } from "node:vm";
 import type { AudioConvertOptions, Provider, ProviderTools } from "@toonflow/providers";
 import tfRouter from "@toonflow/providers/media/tfRouter";
-import drawThings from "@toonflow/providers/media/drawThings";
+import { validateDrawThingsModelId, validateDrawThingsParameters } from "@toonflow/providers/media/drawThings";
 import { parse, parseExpression } from "@babel/parser";
 import { z } from "zod";
 import conf from "@/utils/conf";
@@ -22,42 +22,139 @@ const providerTranspiler = new Bun.Transpiler({ loader: "ts", target: "bun", def
 const providerIdSchema = z.string().max(96).regex(/^[a-z][a-zA-Z0-9]*$/)
   .refine(value => !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(value), "供应商 ID 不能是系统保留文件名");
 export const mediaProviderFileSchema = z.string().refine(value => value.endsWith(".ts") && providerIdSchema.safeParse(value.slice(0, -3)).success, "供应商文件名无效");
+const mediaProviderRuleSchema = z.object({
+  type: z.enum(["input", "inputNumber", "switch", "select", "checkbox", "checkboxGroup", "radio", "radioGroup"]),
+  field: z.string().regex(/^[a-z][a-zA-Z0-9]*$/).max(96),
+  title: z.string().min(1).max(200),
+  value: z.json().optional(),
+  props: z.record(z.string(), z.json()).optional(),
+}).catchall(z.json());
+const mediaProviderRulesSchema = z.array(mediaProviderRuleSchema).max(100);
 export const mediaModelsSchema = z.array(z.object({
   id: z.string().min(1).max(200).refine(value => !!value.trim()),
   label: z.string().min(1).max(200).refine(value => !!value.trim()),
   type: z.enum(["text", "image", "video", "audio"]),
+  mode: z.array(z.union([z.string().min(1).max(64), z.array(z.string().min(1).max(128)).min(1).max(32)])).max(32).optional(),
+  imageSizes: z.array(z.string().trim().min(1).max(64)).min(1).max(100).optional(),
+  imageRatios: z.array(z.string().regex(/^[1-9]\d{0,3}:[1-9]\d{0,3}$/)).min(1).max(100).optional(),
+  durationResolutionMap: z.array(z.object({
+    duration: z.array(z.number().finite()).min(1).max(100),
+    resolution: z.array(z.string().trim().min(1).max(64)).min(1).max(100),
+  }).catchall(z.json())).max(100).optional(),
+  audio: z.union([z.boolean(), z.literal("optional")]).optional(),
+  voices: z.array(z.object({ title: z.string().trim().min(1).max(200), voice: z.string().trim().min(1).max(200) }).catchall(z.json())).max(1000).optional(),
+  parameters: z.record(z.string(), z.json()).optional(),
 }).catchall(z.json())).max(2000).refine(models => new Set(models.map(model => model.id)).size === models.length, "模型 ID 不能重复");
 
-function drawThingsModelsDirectory() {
-  const configured = process.env.TOONFLOW_DRAW_THINGS_MODELS_DIR?.trim();
-  if (configured) return configured;
-  return process.platform === "darwin"
-    ? join(homedir(), "Library/Containers/com.liuliu.draw-things/Data/Documents/Models")
-    : undefined;
+async function validateProviderModelCapabilities(source: string, models: z.infer<typeof mediaModelsSchema>) {
+  const provider = await loadMediaProviderSource(source, {});
+  for (const model of models) {
+    if (model.type === "text") continue;
+    const method = model.type === "image" ? provider.generateImage : model.type === "video" ? provider.generateVideo : model.type === "audio" ? provider.generateAudio : undefined;
+    if (!method) invalid(`供应商未实现${model.type === "image" ? "图片" : model.type === "video" ? "视频" : model.type === "audio" ? "音频" : "文本"}生成，不能配置模型“${model.id}”`);
+  }
 }
 
-async function discoverDrawThingsModels(models: z.infer<typeof mediaModelsSchema>) {
-  const directory = drawThingsModelsDirectory();
-  if (!directory) return models;
-  let entries: Dirent[];
+const drawThingsDefaultBaseUrl = "http://127.0.0.1:7888";
+
+function drawThingsBaseUrl(value?: string) {
+  const raw = value?.trim() || drawThingsDefaultBaseUrl;
+  let url: URL;
+  try { url = new URL(raw); }
+  catch { invalid("Draw Things 地址无效"); }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) invalid("Draw Things 地址必须是无凭据或片段的 HTTP/HTTPS 地址");
+  return raw.replace(/\/$/, "");
+}
+
+async function drawThingsResponseError(response: Response) {
   try {
-    entries = await readdir(directory, { withFileTypes: true }) as Dirent[];
-  } catch { return models; }
+    const contentType = response.headers.get("content-type") ?? "";
+    const value = /json/i.test(contentType) ? await response.clone().json() : await response.clone().text();
+    return mediaErrorMessage(value, {});
+  } catch { return ""; }
+}
+
+function isDrawThingsLocalUrl(value: string) {
+  const hostname = new URL(value).hostname.toLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+type DrawThingsRegistryEntry = { file?: unknown; name?: unknown };
+
+const drawThingsDataDirectory = join(homedir(), "Library/Containers/com.liuliu.draw-things/Data");
+const drawThingsModelsDirectory = join(drawThingsDataDirectory, "Documents/Models");
+const drawThingsRegistryPaths = [
+  join(drawThingsDataDirectory, "Library/Caches/net/models.json"),
+  join(drawThingsModelsDirectory, "custom.json"),
+];
+
+async function readDrawThingsRegistry(path: string) {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    return Array.isArray(value) ? value.filter((item): item is DrawThingsRegistryEntry => !!item && typeof item === "object" && !Array.isArray(item)) : [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(`读取 Draw Things 模型注册表失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function listLocalDrawThingsModels() {
+  if (process.platform !== "darwin") invalid("当前平台暂不支持读取 Draw Things 本机模型注册表");
+  let entries: Dirent[];
+  try { entries = await readdir(drawThingsModelsDirectory, { withFileTypes: true }) as Dirent[]; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(`读取 Draw Things 模型目录失败：${error instanceof Error ? error.message : String(error)}`);
+  }
   const installed = new Set(entries
     .filter(entry => entry.isFile() && /\.(?:ckpt|safetensors)$/i.test(entry.name))
     .map(entry => entry.name));
-  // ACT: 只同步 Provider 已配置参数的模型，避免把 LoRA、VAE 或未知主模型放进可生成下拉框。
-  const known = new Map(models.map(model => [model.id, model]));
-  return [...known.values()].filter(model => installed.has(model.id));
+  const registry = (await Promise.all(drawThingsRegistryPaths.map(readDrawThingsRegistry))).flat();
+  const seen = new Set<string>();
+  return registry.flatMap(item => {
+    const id = typeof item.file === "string" ? item.file.trim() : "";
+    if (!id || !installed.has(id) || seen.has(id)) return [];
+    seen.add(id);
+    const label = typeof item.name === "string" && item.name.trim() ? item.name.trim() : id.replace(/\.(?:ckpt|safetensors)$/i, "");
+    return [{ id, label, type: "image" as const, mode: ["text", "singleImage"] }];
+  });
 }
 
-export async function listDrawThingsModels() {
-  return discoverDrawThingsModels(mediaModelsSchema.parse(drawThings.models));
+export async function listDrawThingsModels(baseUrl?: string) {
+  const url = drawThingsBaseUrl(baseUrl);
+  if (!isDrawThingsLocalUrl(url)) invalid("远程 Draw Things 不提供模型列表接口，请手动添加模型 ID");
+  return listLocalDrawThingsModels();
+}
+
+export async function checkDrawThingsConnection(baseUrl?: string) {
+  const url = drawThingsBaseUrl(baseUrl);
+  let response: Response | undefined;
+  let lastError: unknown;
+  for (const path of ["/", "/sdapi/v1/options"]) {
+    try {
+      response = await fetch(`${url}${path}`, { signal: AbortSignal.timeout(5000) });
+      if (response.ok) {
+        let currentModel = "";
+        try {
+          const value = await response.clone().json() as unknown;
+          const model = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>).model : undefined;
+          if (typeof model === "string") currentModel = model.trim();
+        } catch { /* ACT: 只要 HTTP 接口可达，非 JSON 正文不影响连接判断。 */ }
+        return { reachable: true, message: currentModel ? `Draw Things 已连接，当前模型：${currentModel}` : "Draw Things 已连接" };
+      }
+    } catch (error) { lastError = error; }
+  }
+  const detail = response ? await drawThingsResponseError(response) : "";
+  if (response) return { reachable: false, message: `Draw Things 接口返回 HTTP ${response.status}${detail ? `：${detail}` : ""}` };
+  return { reachable: false, message: `无法连接 Draw Things Local API：${lastError instanceof Error ? lastError.message : String(lastError ?? "未知错误")}` };
 }
 
 async function providerMetadata(fileName: string, source: string) {
   const result = metadata(fileName, source);
-  return result.id === "drawThings" ? { ...result, models: await discoverDrawThingsModels(result.models) } : result;
+  if (result.id !== "drawThings") return result;
+  const migrated = migrateDrawThingsSource(source);
+  const normalized = migrated === source ? result : { ...metadata(fileName, migrated), revision: result.revision };
+  return { ...normalized, models: normalized.models.filter(model => model.type === "image") };
 }
 
 function migrateDrawThingsSource(source: string) {
@@ -74,7 +171,7 @@ function migrateDrawThingsSource(source: string) {
   if (!source.includes('error.name === "TimeoutError"')) {
     migrated = migrated.replace(
       'throw new Error(`无法连接 Draw Things Local API：${error instanceof Error ? error.message : String(error)}`);',
-      'if (timeoutSignal.aborted) throw new Error(`Draw Things 请求超时（${timeout / 60_000} 分钟），请在媒体供应商配置中增加请求超时时间`);\n    if (context.signal?.aborted) throw error;\n    throw new Error(`无法连接 Draw Things Local API：${error instanceof Error ? error.message : String(error)}`);',
+      'if (context.signal?.aborted) throw error;\n    if (timeoutSignal.aborted || (error instanceof Error && error.name === "TimeoutError")) throw new Error(`Draw Things 请求超时（${timeout / 60_000} 分钟），请在媒体供应商配置中增加请求超时时间`);\n    throw new Error(`无法连接 Draw Things Local API：${error instanceof Error ? error.message : String(error)}`);',
     );
   }
   const presetsStart = source.indexOf("const modelPresets");
@@ -210,13 +307,13 @@ function parseProvider(source: string) {
   function value(name: string) {
     const property = entries.get(name);
     if (!property) return undefined;
-    if (property.type !== "ObjectProperty" || (property.shorthand && name !== "version")) invalid(t`${name} 必须直接使用字面量`);
+    if (property.type !== "ObjectProperty" || (property.shorthand && name !== "version" && name !== "rules")) invalid(t`${name} 必须直接使用字面量`);
     let expression = unwrap(property.value as Expression);
-    if (name === "version" && expression.type === "Identifier") {
+    if ((name === "version" || name === "rules") && expression.type === "Identifier") {
       const identifier = expression.name;
       const declaration = module.program.body.flatMap(item => item.type === "VariableDeclaration" && item.kind === "const" ? item.declarations : [])
         .find(item => item.id.type === "Identifier" && item.id.name === identifier);
-      if (!declaration?.init) invalid("version 必须使用字符串字面量或顶层 const 字符串常量");
+      if (!declaration?.init) invalid(name === "rules" ? "rules 必须使用字面量或顶层 const 常量" : "version 必须使用字符串字面量或顶层 const 字符串常量");
       expression = declaration.init;
     }
     return literal(expression);
@@ -226,24 +323,35 @@ function parseProvider(source: string) {
   const version = value("version");
   const readme = value("readme");
   const modelsUrl = value("modelsUrl");
+  const rules = mediaProviderRulesSchema.safeParse(value("rules") ?? [], validationOptions());
   if (!providerIdSchema.safeParse(id).success) invalid("供应商 ID 必须为小驼峰文件名");
   if (typeof label !== "string" || !label.trim() || label.length > 200) invalid("供应商名称无效");
   if (version !== undefined && (typeof version !== "string" || !version.trim())) invalid("供应商版本必须为非空字符串");
   if (readme !== undefined && typeof readme !== "string") invalid("供应商说明必须为字符串");
+  if (!rules.success) invalid(rules.error.issues.map(issue => translateMessage(issue.message)).join("; "));
   if (modelsUrl !== undefined && !z.url({ protocol: /^https?$/ }).refine(value => {
     const url = new URL(value);
     return !url.username && !url.password && !url.hash;
   }).safeParse(modelsUrl).success) invalid("模型列表地址须为不含凭据或片段的 HTTP URL");
   const models = mediaModelsSchema.safeParse(value("models") ?? [], validationOptions());
   if (!models.success) invalid(models.error.issues.map(issue => translateMessage(issue.message)).join("; "));
-  return { object, modelProperty: entries.get("models"), id: id as string, label, version: version?.trim(), readme, modelsUrl: modelsUrl as string | undefined, models: models.data };
+  return { object, modelProperty: entries.get("models"), id: id as string, label, version: version?.trim(), readme, modelsUrl: modelsUrl as string | undefined, rules: rules.data, models: models.data };
 }
 
 function metadata(fileName: string, source: string) {
-  const { id, label, version, readme, modelsUrl, models } = parseProvider(source);
+  const { id, label, version, readme, modelsUrl, rules, models } = parseProvider(source);
   if (fileName !== `${id}.ts`) invalid("供应商 ID 与文件名不一致");
+  if (id === "drawThings") for (const model of models) {
+    if (model.type !== "image") continue;
+    try { validateDrawThingsModelId(model.id); }
+    catch (error) { invalid(error instanceof Error ? error.message : String(error)); }
+    if (model.parameters !== undefined) {
+      try { validateDrawThingsParameters(model.parameters); }
+      catch (error) { invalid(error instanceof Error ? error.message : String(error)); }
+    }
+  }
   // ACT: 兼容旧 TF-Router 文件，缺少列表地址时使用内置定义。
-  return { fileName, id, label, version, readme, modelsUrl: modelsUrl ?? (id === tfRouter.id ? tfRouter.modelsUrl : undefined), models,
+  return { fileName, id, label, version, readme, rules, modelsUrl: modelsUrl ?? (id === tfRouter.id ? tfRouter.modelsUrl : undefined), models,
     revision: createHash("sha256").update(source).digest("hex"), loadError: "" };
 }
 
@@ -303,25 +411,35 @@ export async function preserveMediaProviderModels(sourcePath: string, targetPath
     throw error;
   });
   if (previous === undefined) return;
-  const incoming = parseProvider(await readFile(sourcePath, "utf8"));
-  if (incoming.models.length) return;
+  const source = await readFile(sourcePath, "utf8");
+  const incoming = parseProvider(source);
   const existing = parseProvider(previous);
-  if (!existing.models.length || !incoming.modelProperty) return;
+  if (!incoming.modelProperty) return;
   const newline = previous.includes("\r\n") ? "\r\n" : "\n";
+  // 用户对模型列表的增删属于持久化配置，应用升级时不能重新加入已删除的内置模型。
   const formatted = JSON.stringify(existing.models, null, 2).replace(/\n/g, `${newline}  `);
   const property = incoming.modelProperty.type === "ObjectProperty" ? incoming.modelProperty : undefined;
   if (!property) return;
-  const source = await readFile(sourcePath, "utf8");
   return source.slice(0, property.value.start!) + formatted + source.slice(property.value.end!);
 }
 
-export async function addMediaProvider(source: string) {
-  const { id } = parseProvider(source);
+export async function addMediaProvider(source: string, providerConfig?: Record<string, unknown>) {
+  const { id, models } = parseProvider(source);
+  await validateProviderModelCapabilities(source, models);
   const fileName = `${id}.ts`;
   const result = await providerMetadata(fileName, source);
   const path = join((await directory(true))!, fileName);
   const release = lockWorkspaceFiles([path]);
-  try { await writeWorkspaceFile(path, source, true); }
+  try {
+    await writeWorkspaceFile(path, source, true);
+    if (providerConfig) {
+      try { conf.set(`settings.mediaProviderConfigs.${result.id}`, providerConfig); }
+      catch (error) {
+        await unlink(path).catch(rollbackError => console.error("回滚媒体供应商文件失败", rollbackError));
+        throw error;
+      }
+    }
+  }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") invalid(t`媒体供应商“${result.label}”已安装，请在「设置 → 媒体模型」中编辑，或先删除后重新安装。`, 409);
     throw error;
@@ -330,10 +448,19 @@ export async function addMediaProvider(source: string) {
   return result;
 }
 
-export async function saveMediaProvider(fileName: string, models: z.infer<typeof mediaModelsSchema>, revision: string, expectedApiKey?: string) {
+export async function saveMediaProvider(fileName: string, models: z.infer<typeof mediaModelsSchema>, revision: string, expectedApiKey?: string, providerConfig?: Record<string, unknown>) {
   if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
   const checked = mediaModelsSchema.safeParse(models, validationOptions());
   if (!checked.success) invalid(checked.error.issues.map(issue => translateMessage(issue.message)).join("; "));
+  if (fileName === "drawThings.ts") for (const model of checked.data) {
+    if (model.type !== "image") invalid("Draw Things 当前仅支持图片模型");
+    try { validateDrawThingsModelId(model.id); }
+    catch (error) { invalid(error instanceof Error ? error.message : String(error)); }
+    if (model.parameters !== undefined) {
+      try { validateDrawThingsParameters(model.parameters); }
+      catch (error) { invalid(error instanceof Error ? error.message : String(error)); }
+    }
+  }
   const path = await directory();
   if (!path) invalid("供应商文件不存在", 404);
   const release = lockWorkspaceFiles([join(path, fileName)]);
@@ -349,8 +476,16 @@ export async function saveMediaProvider(fileName: string, models: z.infer<typeof
     // ACT: 只替换 models 源码区间，保留供应商函数及其余用户编辑。
     const source = current.source.slice(0, start) + replacement + current.source.slice(end);
     const result = metadata(fileName, source);
+    await validateProviderModelCapabilities(source, checked.data);
     if (expectedApiKey !== undefined && getMediaProviderApiKey(result.id) !== expectedApiKey) invalid("供应商配置已变更，请重试", 409);
     await writeWorkspaceFile(join(path, fileName), source);
+    if (providerConfig) {
+      try { conf.set(`settings.mediaProviderConfigs.${result.id}`, providerConfig); }
+      catch (error) {
+        await writeWorkspaceFile(join(path, fileName), current.source).catch(rollbackError => console.error("回滚媒体供应商文件失败", rollbackError));
+        throw error;
+      }
+    }
     return result;
   } finally { release(); }
 }
@@ -387,8 +522,14 @@ export async function refreshMediaProviderModels(fileName: string, revision?: st
     return { ...previous, ...model, id, label: model.label ?? previous?.label
       ?? (typeof model.display_name === "string" ? model.display_name : typeof model.displayName === "string" ? model.displayName : id), type };
   });
-  const types = new Set(models.map(model => model.type));
-  return saveMediaProvider(fileName, [...provider.models.filter(model => !types.has(model.type)), ...models], provider.revision, apiKey);
+  const refreshed = new Map(models.map(model => [model.id, model]));
+  const merged = provider.models.map(model => {
+    const update = refreshed.get(model.id);
+    if (!update) return model;
+    refreshed.delete(model.id);
+    return { ...model, ...update };
+  });
+  return saveMediaProvider(fileName, [...merged, ...refreshed.values()], provider.revision, apiKey);
 }
 
 export async function deleteMediaProvider(fileName: string, revision: string) {
@@ -424,7 +565,8 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   await module.link(rejectImport);
   await module.evaluate({ timeout: 1000 });
   signal?.throwIfAborted();
-  const definition = (module.namespace as { default: Provider }).default;
+  const definition = { ...(module.namespace as { default: Provider }).default };
+  if (id === "drawThings") definition.generateVideo = undefined;
   const rules = Array.isArray(definition.rules) ? definition.rules : [];
   const providerConfig = { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...structuredClone(config) };
   const provider = {

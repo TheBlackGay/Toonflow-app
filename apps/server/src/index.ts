@@ -19,8 +19,10 @@ const app = await createApp({
   skillsRoot: resolve(appDirectory, fromSource ? "packages/skills" : "build/skills"),
 });
 const { initializeMcpRuntime } = await import("./utils/mcp/runtime");
-app.listen(realPort, async () => {
+const server = app.listen(realPort, async () => {
   await initializeMcpRuntime(app, `http://127.0.0.1:${realPort}`, resolve(appDirectory, fromSource ? "packages/mcp/src/stdio.ts" : "build/mcp/stdio.js"));
   console.log(`[服务启动成功]: http://localhost:${realPort}`);
   console.log(`[启动耗时]: ${(Date.now() - startTime).toFixed(2)}ms`);
 });
+// 长时间媒体生成由供应商自己的有限超时控制，不能被 Node 默认的 5 分钟请求超时提前中断。
+server.requestTimeout = 0;

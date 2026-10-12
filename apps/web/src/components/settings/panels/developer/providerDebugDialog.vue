@@ -378,7 +378,7 @@ async function install() {
   action.value = "install";
   errorMessage.value = "";
   try {
-    await axios.post("/api/providers/media/add", { source: source.value });
+    await axios.post("/api/providers/media/add", { source: source.value }, { headers: { "x-toonflow-workspace": "1" } });
     invalidateNodeModels("media");
     ElMessage.success("供应商已安装，可在媒体模型设置中配置使用");
   } catch (error) { showError(error); }

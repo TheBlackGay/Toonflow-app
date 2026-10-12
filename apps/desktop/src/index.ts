@@ -2,11 +2,12 @@ import { setLocaleFallback, t, translateMessage } from "@toonflow/server/i18n";
 import { detectLocale, normalizeLocale } from "@toonflow/i18n";
 import { once } from "node:events";
 import { execFile } from "node:child_process";
-import { existsSync, writeAtomicSync } from "@toonflow/file";
+import { appendFile, existsSync, mkdir, writeAtomicSync } from "@toonflow/file";
 import { file } from "@toonflow/file/bun";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { dlopen, ptr } from "bun:ffi";
 import type { DesktopRuntime, PluginInstallRequest } from "@toonflow/server/desktop";
@@ -19,6 +20,55 @@ import createWindowsUpdater, { confirmWindowsUpdateStartup } from "./update/wind
 const execFileAsync = promisify(execFile);
 const pendingInstalls: PluginInstallRequest[] = [];
 let deliverInstall: ((request: PluginInstallRequest) => void) | undefined;
+
+function formatError(error: unknown, seen = new WeakSet<object>()): string {
+  if (error instanceof Error) {
+    if (seen.has(error)) return `${error.name}: ${error.message}`;
+    seen.add(error);
+    const stack = error.stack?.trim() || `${error.name}: ${error.message}`;
+    const cause = "cause" in error && error.cause !== undefined ? formatError(error.cause, seen) : "";
+    return cause ? `${stack}\n\nCaused by:\n${cause}` : stack;
+  }
+  if (typeof error === "string") return error;
+  try { return JSON.stringify(error, null, 2) || String(error); }
+  catch { return String(error); }
+}
+
+async function reportDesktopError(title: string, error: unknown) {
+  const details = formatError(error);
+  const logPath = resolve(userDataDirectory(), "desktop-errors.log");
+  console.error(`[${title}]\n${details}`);
+  try {
+    await mkdir(userDataDirectory(), { recursive: true });
+    await appendFile(logPath, `${new Date().toISOString()} [${title}]\n${details}\n\n`, "utf8");
+  } catch (logError) {
+    console.error("写入桌面异常日志失败：", logError);
+  }
+  try {
+    await Utils.showMessageBox({
+      type: "error",
+      title,
+      message: `${t`Toonflow 遇到异常，详细信息如下：`}\n\n${details.slice(0, 8000)}\n\n${t`完整异常已写入`}：${logPath}`,
+    });
+  } catch (dialogError) {
+    console.error("显示异常弹窗失败：", dialogError);
+  }
+}
+
+// Electrobun 自带处理器会在未捕获异常后退出进程；先弹窗保留完整堆栈，再交给 SDK 结束进程。
+process.prependListener("uncaughtException", error => {
+  void reportDesktopError(t`运行期间发生未捕获异常`, error);
+});
+process.prependListener("unhandledRejection", reason => {
+  void reportDesktopError(t`运行期间发生未处理的 Promise 异常`, reason);
+});
+
+function userDataDirectory() {
+  if (process.platform === "darwin") return resolve(homedir(), "Library/Application Support/Toonflow");
+  if (process.platform === "win32") return resolve(process.env.APPDATA || resolve(homedir(), "AppData/Roaming"), "Toonflow");
+  return resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "toonflow");
+}
+
 function openUrl(url: string) {
   const request = parseInstallUrl(url);
   if (deliverInstall) deliverInstall(request);
@@ -78,6 +128,8 @@ async function start() {
   let closePromise: Promise<void> | undefined;
   let quitRequested = false;
   let quitApproved = false;
+  let windowClosing = false;
+  let mainWindow: BrowserWindow | undefined;
 
   async function closeBackend() {
     if (closePromise) return closePromise;
@@ -100,6 +152,8 @@ async function start() {
     pendingInstalls.length = 0;
     splash?.close();
     splash = undefined;
+    // 先显式关闭 WebView，避免宿主退出与渲染进程释放应用包文件并行，导致重新安装时目录仍被占用。
+    if (!windowClosing) mainWindow?.close();
     void closeBackend()
       .then(() => {
         quitApproved = true;
@@ -125,9 +179,9 @@ async function start() {
   });
 
   try {
-    // Windows 的 data 与 app 同级；macOS 的 data 与 .app 同级，避免随程序更新被替换。
+    // 正式版配置放在系统用户目录，避免随应用更新被替换。
     const installDirectory = resolve(PATHS.RESOURCES_FOLDER, process.platform === "darwin" ? "../../.." : "../..");
-    const dataDirectory = process.env.TOONFLOW_DATA_DIR ?? resolve(installDirectory, "data");
+    const dataDirectory = process.env.TOONFLOW_DATA_DIR ?? userDataDirectory();
     // ACT: 先显示原生动画，再加载服务，避免初始化期间没有反馈。
     const startupSettings = await file(resolve(dataDirectory, "settings.json")).json().catch((error) => {
       if (error.code !== "ENOENT") console.error("读取启动设置失败，使用默认启动动画：", error);
@@ -190,8 +244,13 @@ async function start() {
       pluginRevision: hash,
     });
     server = app.listen(0, "127.0.0.1");
+    // 长时间媒体生成由供应商自己的有限超时控制，不能被 Node 默认的 5 分钟请求超时提前中断。
+    server.requestTimeout = 0;
 
     await once(server, "listening");
+    server.on("error", error => {
+      void reportDesktopError(t`桌面服务运行异常`, error);
+    });
     if (isClosing) {
       await closeBackend();
       return;
@@ -205,7 +264,7 @@ async function start() {
     // ACT: 宽高分别限制在屏幕可用区域内，预留标题栏和边距，不固定比例。
     const width = Math.min(1280, workArea.width - 64);
     const height = Math.min(960, workArea.height - 64);
-    const mainWindow = new BrowserWindow({
+    const window = new BrowserWindow({
       title: "Toonflow",
       url: `http://127.0.0.1:${address.port}/?desktop=1`,
       hidden: Boolean(splash),
@@ -216,8 +275,9 @@ async function start() {
         y: workArea.y + Math.round((workArea.height - height) / 2),
       },
     });
+    mainWindow = window;
     // ACT: 两版 SDK 的全局事件不带 WebView ID，使用事件名后缀限定主窗口。
-    Electrobun.events.on(`new-window-open-${mainWindow.webview.id}`, (event: { data: { detail: unknown } }) => {
+    Electrobun.events.on(`new-window-open-${window.webview.id}`, (event: { data: { detail: unknown } }) => {
       const detail = event.data.detail;
       const url = typeof detail === "string" ? detail : detail && typeof detail === "object" && "url" in detail ? detail.url : undefined;
       if (typeof url !== "string" || !URL.canParse(url)) return;
@@ -228,7 +288,7 @@ async function start() {
       }
     });
     // 页面重载时监听器随旧页面销毁，安装请求等新页面 ready 后再投递。
-    Electrobun.events.on(`will-navigate-${mainWindow.webview.id}`, () => { deliverInstall = undefined; });
+    Electrobun.events.on(`will-navigate-${window.webview.id}`, () => { deliverInstall = undefined; });
     let isShowing = false;
     app.locals.desktop = {
       openUrl,
@@ -251,7 +311,7 @@ async function start() {
           if (splash) {
             await splash.finish();
             if (isClosing || !splash) return;
-            mainWindow.show();
+            window.show();
             splash.close();
             splash = undefined;
           }
@@ -266,10 +326,10 @@ async function start() {
           return;
         }
         deliverInstall = request => {
-          mainWindow.unminimize();
-          mainWindow.show();
-          mainWindow.activate();
-          mainWindow.webview.executeJavascript(`window.dispatchEvent(new CustomEvent("toonflow:install-plugin", { detail: ${JSON.stringify(request)} }));`);
+          window.unminimize();
+          window.show();
+          window.activate();
+          window.webview.executeJavascript(`window.dispatchEvent(new CustomEvent("toonflow:install-plugin", { detail: ${JSON.stringify(request)} }));`);
         };
         while (pendingInstalls.length) {
           deliverInstall(pendingInstalls[0]!);
@@ -278,7 +338,7 @@ async function start() {
         if (process.platform === "win32") confirmWindowsUpdateStartup(PATHS.RESOURCES_FOLDER);
         else await (Updater as DesktopRuntime["updater"]).confirmStartup?.();
       },
-      openDevTools() { mainWindow.webview.openDevTools(); },
+      openDevTools() { window.webview.openDevTools(); },
       // ACT: Windows 使用两阶段退出；Intel Mac 由兼容入口适配 1.18.1 更新器。
       updater: process.platform === "win32" ? createWindowsUpdater(PATHS.RESOURCES_FOLDER, Utils as unknown as Parameters<typeof createWindowsUpdater>[1]) : Updater,
     } satisfies DesktopRuntime;
@@ -292,14 +352,17 @@ async function start() {
         DestroyIcon: { args: ["ptr"], returns: "i32" },
       });
       const native = user32.symbols;
-      const window = mainWindow.ptr;
-      const dpi = native.GetDpiForWindow(window);
+      const windowPtr = window.ptr;
+      const dpi = native.GetDpiForWindow(windowPtr);
       const iconPath = Buffer.from(`${resolve(PATHS.RESOURCES_FOLDER, "app.ico")}\0`, "utf16le");
       // ICON_SMALL / ICON_BIG，各自使用当前窗口 DPI 对应的系统尺寸。
       const icons = [49, 11].map((metric) => native.LoadImageW(
         null, ptr(iconPath), 1, native.GetSystemMetricsForDpi(metric, dpi), native.GetSystemMetricsForDpi(metric + 1, dpi), 0x10,
       ));
+      let iconsClosed = false;
       const closeIcons = () => {
+        if (iconsClosed) return;
+        iconsClosed = true;
         for (const icon of icons) if (icon) native.DestroyIcon(icon);
         user32.close();
       };
@@ -307,10 +370,11 @@ async function start() {
         closeIcons();
         throw new Error(t`无法加载主窗口图标`);
       }
-      icons.forEach((icon, type) => native.SendMessageW(window, 0x80, type, icon));
-      mainWindow.on("close", closeIcons);
+      icons.forEach((icon, type) => native.SendMessageW(windowPtr, 0x80, type, icon));
+      window.on("close", closeIcons);
     }
-    mainWindow.on("close", () => {
+    window.on("close", () => {
+      windowClosing = true;
       requestQuit();
     });
     if (process.platform === "win32") {
@@ -319,7 +383,7 @@ async function start() {
     }
   } catch (error) {
     splash?.close();
-    console.error("桌面启动失败：", error);
+    await reportDesktopError(t`桌面启动失败`, error);
     if (process.platform === "win32") {
       try { confirmWindowsUpdateStartup(PATHS.RESOURCES_FOLDER, true); }
       catch (resultError) { console.error("更新启动结果写入失败：", resultError); }

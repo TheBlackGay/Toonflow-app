@@ -8,6 +8,8 @@ export default Router().put("/", validateFields({
   fileName: u.mediaProvider.mediaProviderFileSchema,
   models: u.mediaProvider.mediaModelsSchema,
   revision: z.string().regex(/^[a-f0-9]{64}$/),
+  config: z.record(z.string(), z.json()).optional(),
 }), async (req, res) => {
-  res.json(success(await u.mediaProvider.saveMediaProvider(req.body.fileName, req.body.models, req.body.revision)));
+  u.mcpControl.assertAppRequest(req);
+  res.json(success(await u.mediaProvider.saveMediaProvider(req.body.fileName, req.body.models, req.body.revision, undefined, req.body.config)));
 });

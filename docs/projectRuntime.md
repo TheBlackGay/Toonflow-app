@@ -53,8 +53,8 @@ docker compose up --build
 
 ## 桌面平台
 
-- Windows x64：需要 WebView2；打包需要 NSIS。
-- macOS arm64：使用 Electrobun 2.0.1 和 Xcode Command Line Tools。
+- Windows x64：需要 WebView2；打包需要 NSIS。正式版用户配置保存在 `%APPDATA%/Toonflow`，不随安装目录更新。
+- macOS arm64：使用 Electrobun 2.0.1 和 Xcode Command Line Tools。正式版用户配置保存在 `~/Library/Application Support/Toonflow`，不随 `.app` 更新。
 - macOS x64：先在 `compat/macIntel` 安装锁定依赖，使用兼容 SDK。
 - Linux：当前不支持桌面构建，使用 Web/Server 或 Docker。
 

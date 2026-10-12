@@ -57,7 +57,7 @@
 import { computed, onMounted, onScopeDispose, ref, watch } from "vue";
 import { ElButton, ElCard, ElOption, ElOptionGroup, ElPopover, ElSelect } from "element-plus";
 import { IconArrowUp, IconChevronUp, IconPlayerStop, IconSparkles } from "@tabler/icons-vue";
-import { groupNodeModels, useNodeAi, type NodeImageRequest, type NodeMediaModel } from "../nodeAi";
+import { groupNodeModels, imageRatios, imageSizes, useNodeAi, type NodeImageRequest, type NodeMediaModel } from "../nodeAi";
 import { showNodeError } from "../showNodeError";
 import promptInput from "./promptInput.vue";
 
@@ -77,8 +77,8 @@ const modelsLoading = ref(false);
 const generating = ref(false);
 const modelGroups = computed(() => groupNodeModels(models.value));
 const selectedModel = computed(() => models.value.find(item => JSON.stringify([item.providerId, item.modelId]) === model.value));
-const sizeOptions = computed(() => selectedModel.value?.imageSizes?.length ? selectedModel.value.imageSizes : ["2K"]);
-const ratioOptions = computed(() => selectedModel.value?.imageRatios?.length ? selectedModel.value.imageRatios : ["16:9"]);
+const sizeOptions = computed(() => selectedModel.value?.imageSizes?.length ? selectedModel.value.imageSizes : [...imageSizes]);
+const ratioOptions = computed(() => selectedModel.value?.imageRatios?.length ? selectedModel.value.imageRatios : [...imageRatios]);
 let modelsRequest: Promise<void> | undefined;
 let generationController: AbortController | undefined;
 let disposed = false;
@@ -86,7 +86,7 @@ let disposed = false;
 watch(selectedModel, choice => {
   if (!choice) return;
   // ACT: 沿用图片生成节点的 K 单位排序，其他单位排在数值选项之后。
-  if (!sizeOptions.value.includes(size.value)) size.value = sizeOptions.value.toSorted((left, right) =>
+  if (!sizeOptions.value.includes(size.value)) size.value = [...sizeOptions.value].sort((left, right) =>
     (Number.parseFloat(left) || Infinity) - (Number.parseFloat(right) || Infinity)
   )[0]!;
   if (!ratioOptions.value.includes(ratio.value)) ratio.value = ratioOptions.value.includes("16:9") ? "16:9" : ratioOptions.value[0]!;

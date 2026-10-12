@@ -295,6 +295,15 @@ export async function getAgentSession(cwd: string, path: string) {
   let replyTo: string | undefined;
   const entriesMessages = branch.flatMap<SessionMessage>((entry) => {
     if (entry.type === "custom" && entry.customType === "toonflowDeletedUser") replyTo = entry.id;
+    if (entry.type === "compaction") {
+      const summary = (entry as SessionEntry & { summary?: unknown }).summary;
+      if (typeof summary !== "string" || !summary.trim()) return [];
+      return [{
+        id: entry.id, entryId: entry.id, replyTo: undefined, role: "assistant" as const,
+        content: summary, parts: [{ id: entry.id, type: "text" as const, content: summary }], error: undefined,
+        attachments: undefined, mentions: undefined, report: undefined,
+      }];
+    }
     if (entry.type === "custom_message" && entry.customType === "subAgentReport") {
       const details = entry.details as { id?: string; file: string; name: string; content?: string };
       const content = details.content ?? (typeof entry.content === "string" ? entry.content : getToolResultText(entry.content));
@@ -455,12 +464,8 @@ function getAgentContext(history: SessionManager, contextWindow: number) {
   const compactionIndex = branch.findLastIndex((entry) => entry.type === "compaction");
   let tokens: number | null;
   if (compactionIndex >= 0) {
-    const hasPostCompactionUsage = branch.slice(compactionIndex + 1).some((entry) => {
-      if (entry.type !== "message" || entry.message.role !== "assistant") return false;
-      if (entry.message.stopReason === "aborted" || entry.message.stopReason === "error") return false;
-      return calculateContextTokens(entry.message.usage) > 0;
-    });
-    tokens = hasPostCompactionUsage ? estimateAgentContextTokens(messages, branch) : null;
+    // 压缩刚完成且尚无新回复时，按当前压缩后的会话内容估算，避免界面一直显示未知。
+    tokens = estimateAgentContextTokens(messages, branch);
   } else {
     tokens = estimateAgentContextTokens(messages, branch);
   }

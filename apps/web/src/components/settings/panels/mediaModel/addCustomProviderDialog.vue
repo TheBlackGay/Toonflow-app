@@ -35,11 +35,19 @@
           <form-create v-model:api="formApi" :rule="providerRules" :option="formOptions" />
           <div class="modelHeader">
             <el-text tag="strong">模型列表 <el-text type="info">{{ models.length }}</el-text></el-text>
-            <el-button v-if="selectedProvider === 'drawThings'" :icon="IconRefresh" :loading="refreshing" :disabled="saving" @click="refreshDrawThingsModels">刷新本地模型</el-button>
+            <div v-if="selectedProvider === 'drawThings'" class="modelActions">
+              <el-button :icon="IconPlus" :disabled="saving || refreshing" @click="addDrawThingsModel">手动添加模型</el-button>
+              <el-button :icon="IconRefresh" :loading="refreshing" :disabled="saving" @click="refreshDrawThingsModels">读取本机模型</el-button>
+            </div>
           </div>
           <el-table v-if="models.length" class="modelList" :data="models" rowKey="id" aria-label="模型列表">
             <el-table-column prop="id" label="模型 ID" minWidth="220" showOverflowTooltip />
             <el-table-column prop="label" label="显示名称" minWidth="180" showOverflowTooltip />
+            <el-table-column v-if="selectedProvider === 'drawThings'" label="操作" width="90" align="right">
+              <template #default="{ $index }">
+                <el-button text type="danger" :disabled="saving || refreshing" @click="removeDrawThingsModel($index)">删除</el-button>
+              </template>
+            </el-table-column>
           </el-table>
           <el-alert v-if="formError" :title="formError" type="error" :closable="false" showIcon />
         </section>
@@ -64,7 +72,7 @@
               <el-input :modelValue="fileName" :prefixIcon="IconFileCode" placeholder="尚未选择文件" readonly aria-label="已选择的供应商文件" />
               <el-button :icon="IconFolderOpen" @click="fileInput?.click()">选择文件</el-button>
             </div>
-            <el-text class="fieldHint" type="info" size="small">支持 .ts 文件，最大 1 MB。</el-text>
+            <el-text class="fieldHint" type="info" size="small">支持 .ts 文件，最大 2 MB。</el-text>
           </el-form-item>
           <el-form-item v-else label="供应商代码">
             <el-input v-model="code" class="sourceInput" type="textarea" dir="ltr" :rows="10" resize="none" aria-label="供应商代码" />
@@ -92,8 +100,8 @@
 import axios from "axios";
 import { computed, ref, shallowRef, watch } from "vue";
 import formCreate, { type Api, type Options } from "../../formCreate";
-import { IconFileCode, IconCode, IconFolderOpen, IconCopy, IconRefresh } from "@tabler/icons-vue";
-import { ElMessage } from "element-plus";
+import { IconFileCode, IconCode, IconFolderOpen, IconCopy, IconPlus, IconRefresh } from "@tabler/icons-vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { mediaProviders } from "@toonflow/providers";
 import { modelIcon } from "@toonflow/model-icons";
 import logoUrl from "@toonflow/assets/logo.svg";
@@ -103,9 +111,10 @@ import tfRouterSource from "@toonflow/providers/media/tfRouter?raw";
 import apiMartSource from "@toonflow/providers/media/apiMart?raw";
 import metasoSource from "@toonflow/providers/media/metaso?raw";
 import drawThingsSource from "@toonflow/providers/media/drawThings?raw";
+import { validateDrawThingsModelId, validateDrawThingsParameters } from "@toonflow/providers/media/drawThings";
 import type { MediaProvider } from "./types";
 import { providerPrompt } from "./providerPrompt";
-import { saveSettings } from "@/stores/settings";
+import { reloadSettings } from "@/stores/settings";
 import { writeClipboardText } from "@/lib/clipboard";
 
 const { mode = "custom" } = defineProps<{ mode?: "builtin" | "custom" }>();
@@ -138,6 +147,10 @@ const addedProvider = shallowRef<MediaProvider>();
 const formOptions = computed<Options>(() => ({ form: { labelPosition: "top", disabled: saving.value }, submitBtn: false, resetBtn: false }));
 const providerRules = computed(() => formCreate.copyRules([...(activeProvider.value?.rules ?? [])]));
 const source = computed(() => mode === "builtin" ? providerSources[selectedProvider.value] ?? "" : activeTab.value === "file" ? fileSource.value : code.value);
+const providerSource = computed(() => {
+  if (mode !== "builtin" || selectedProvider.value !== "drawThings" || !refreshedModels.value) return source.value;
+  return source.value.replace(/models:\s*\[\s*\]\s*(?:\/\*[\s\S]*?\*\/)?\s*,?/, `models: ${JSON.stringify(refreshedModels.value)},`);
+});
 
 watch([activeTab, selectedProvider], () => {
   formError.value = "";
@@ -161,16 +174,48 @@ async function refreshDrawThingsModels() {
   refreshing.value = true;
   formError.value = "";
   try {
-    const { data } = await axios.get<{ code: number; data: MediaProvider["models"]; message?: string }>("/api/providers/media/drawThings/models");
+    const formValues = formApi.value?.formData();
+    const baseUrl = typeof formValues?.baseUrl === "string" ? formValues.baseUrl.trim() : "";
+    const { data } = await axios.get<{ code: number; data: MediaProvider["models"]; message?: string }>("/api/providers/media/drawThings/models", {
+      params: baseUrl ? { baseUrl } : undefined,
+      headers: { "x-toonflow-workspace": "1" },
+    });
     if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "读取 Draw Things 本地模型失败");
     refreshedModels.value = data.data;
-    if (!data.data.length) ElMessage.warning("未找到已支持的本地模型，请确认模型已安装到 Draw Things Models 目录");
+    if (!data.data.length) ElMessage.warning("未找到已注册且已安装的 Draw Things 图片模型");
     else ElMessage.success(`已刷新 ${data.data.length} 个本地模型`);
   } catch (error) {
     formError.value = axios.isAxiosError(error) ? error.response?.data?.message || "读取 Draw Things 本地模型失败" : error instanceof Error ? error.message : "读取 Draw Things 本地模型失败";
   } finally {
     refreshing.value = false;
   }
+}
+
+async function addDrawThingsModel() {
+  if (saving.value || refreshing.value || selectedProvider.value !== "drawThings") return;
+  try {
+    const { value } = await ElMessageBox.prompt("输入 Draw Things 模型文件名，例如 z_image_turbo_1.0_i8x.ckpt。远程地址也需要手动填写。", "手动添加模型", {
+      confirmButtonText: "添加",
+      cancelButtonText: "取消",
+      inputPlaceholder: "model.ckpt",
+      inputValidator: value => {
+        const id = value.trim();
+        return id && id.length <= 200 ? true : "模型 ID 不能为空且不能超过 200 个字符";
+      },
+    });
+    const id = value.trim();
+    if (models.value.some(model => model.id === id)) throw new Error(`模型 ID 已存在：${id}`);
+    refreshedModels.value = [...models.value, { id, label: id.replace(/\.(?:ckpt|safetensors)$/i, ""), type: "image", mode: ["text", "singleImage"] }];
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("模型 ID 已存在")) formError.value = error.message;
+  }
+}
+
+function removeDrawThingsModel(index: number) {
+  if (selectedProvider.value !== "drawThings") return;
+  const next = [...models.value];
+  next.splice(index, 1);
+  refreshedModels.value = next;
 }
 
 async function readSourceFile(event: Event) {
@@ -180,7 +225,7 @@ async function readSourceFile(event: Event) {
   if (!file) return;
   formError.value = "";
   try {
-    if (!/\.ts$/i.test(file.name) || file.size > 1024 * 1024) throw new Error("请选择不超过 1 MB 的 .ts 文件");
+    if (!/\.ts$/i.test(file.name) || file.size > 2 * 1024 * 1024) throw new Error("请选择不超过 2 MB 的 .ts 文件");
     fileSource.value = await file.text();
     fileName.value = file.name;
   } catch (error) {
@@ -194,11 +239,29 @@ async function addProvider() {
   if (mode === "builtin" && !formApi.value) return;
   saving.value = true;
   formError.value = "";
+  let configSaved = false;
   try {
     let values: Record<string, unknown> | undefined;
     if (mode === "builtin") {
       if (!(await formApi.value!.validate().then(() => true, () => false))) return;
       values = formApi.value!.formData();
+      if (selectedProvider.value === "drawThings") {
+        const baseUrl = typeof values.baseUrl === "string" ? values.baseUrl.trim() : "";
+        let url: URL;
+        try { url = new URL(baseUrl); }
+        catch { throw new Error("Draw Things 地址无效"); }
+        if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new Error("Draw Things 地址必须是无凭据或片段的 HTTP/HTTPS 地址");
+        const extra = typeof values.extraParameters === "string" ? values.extraParameters.trim() : "";
+        if (extra) {
+          let parsed: unknown;
+          try { parsed = JSON.parse(extra); }
+          catch { throw new Error("Draw Things 额外请求参数不是有效的 JSON"); }
+          validateDrawThingsParameters(parsed);
+        }
+        const timeout = values.requestTimeoutMinutes;
+        if (typeof timeout !== "number" || !Number.isInteger(timeout) || timeout < 1 || timeout > 1440) throw new Error("Draw Things 请求超时时间必须是 1 到 1440 分钟的整数");
+        for (const model of models.value) validateDrawThingsModelId(model.id);
+      }
       if ("apiKey" in values) {
         values.apiKey = typeof values.apiKey === "string" ? values.apiKey.trim() : "";
         if (!values.apiKey) throw new Error("请填写 API Key");
@@ -206,27 +269,26 @@ async function addProvider() {
       }
     }
     if (!addedProvider.value) {
-      const { data } = await axios.post<{ data: MediaProvider }>("/api/providers/media/add", { source: source.value });
+      const { data } = await axios.post<{ data: MediaProvider }>("/api/providers/media/add", { source: providerSource.value, ...(values ? { config: values } : {}) }, { headers: { "x-toonflow-workspace": "1" } });
       addedProvider.value = data.data;
-      emit("added", data.data);
+      configSaved = !!values;
+      if (values) await reloadSettings();
       invalidateNodeModels("media");
     }
     if (values) {
-      const providerId = addedProvider.value.id;
-      // ACT: 安装成功但配置保存失败时保留安装结果，重试只保存配置。
-      await saveSettings(settings => {
-        const configs = settings.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
-        if (configs !== undefined && (!configs || typeof configs !== "object" || Array.isArray(configs))) throw new Error("媒体供应商配置格式无效");
-        const current = configs?.[providerId];
-        if (current !== undefined && (!current || typeof current !== "object" || Array.isArray(current))) throw new Error("当前供应商配置格式无效");
-        return { mediaProviderConfigs: { ...configs, [providerId]: { ...current, ...values } } };
-      });
+      const response = await axios.get<{ code: number; data: MediaProvider[]; message?: string }>("/api/providers/media/list", { headers: { "x-toonflow-workspace": "1" } });
+      if (response.data.code !== 200 || !Array.isArray(response.data.data)) throw new Error(response.data.message || "读取最新供应商失败");
+      addedProvider.value = response.data.data.find(item => item.id === addedProvider.value?.id) ?? addedProvider.value;
     }
+    if (!addedProvider.value) throw new Error("供应商添加结果为空");
+    emit("added", addedProvider.value);
     invalidateNodeModels("media");
     visible.value = false;
   } catch (error) {
     const message = axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "添加失败，请重试";
-    formError.value = addedProvider.value ? `供应商已添加，连接配置未保存：${message}。填写内容已保留，请重试。` : message;
+    formError.value = addedProvider.value
+      ? configSaved ? `供应商与连接配置已保存，但刷新页面设置失败：${message}。请重新打开设置。` : `供应商已添加，连接配置未保存：${message}。填写内容已保留，请重试。`
+      : message;
   } finally {
     saving.value = false;
   }
@@ -311,7 +373,17 @@ async function copyPrompt() {
         overflow-wrap: anywhere;
       }
       .modelHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
         margin: 8px 0 12px;
+
+        .modelActions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
       }
       .modelList {
         margin-bottom: 16px;

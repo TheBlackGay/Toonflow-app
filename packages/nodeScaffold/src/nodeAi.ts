@@ -28,6 +28,8 @@ export type NodeImageRequest = {
   size?: string;
 };
 export type NodeImageResult = { path: string; mimeType: string; mediaType: "image" };
+export const imageRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"] as const;
+export const imageSizes = ["1K", "2K", "4K"] as const;
 export type NodeVideoRequest = Omit<MediaGenerationRequest, "size"> & { directory: string; outputDirectory: string };
 export type NodeVideoResult = { path: string; mimeType: string; mediaType: "video" };
 type NodeMediaTask = { id: string; status: "queued" | "running" | "completed" | "failed" | "cancelled"; result?: NodeVideoResult[]; error?: string };
@@ -83,7 +85,7 @@ async function readModels<T>(url: string, signal: AbortSignal): Promise<T[]> {
   signal.throwIfAborted();
   let pending = modelCache.get(url);
   if (!pending) {
-    const request = fetch(url, { cache: "no-store" }).then(readResult<unknown[]>).catch(error => {
+    const request = fetch(url, { cache: "no-store", headers: { "x-toonflow-workspace": "1" } }).then(readResult<unknown[]>).catch(error => {
       if (modelCache.get(url) === request) modelCache.delete(url);
       throw error;
     });

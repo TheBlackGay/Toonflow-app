@@ -9,6 +9,7 @@ import "element-plus/es/components/message/style/css";
 export const settings = ref<Record<string, unknown>>({});
 // ACT: 页面在 loadSettings 完成后才挂载，加载标记仅保留在设置初始化与自动保存内部。
 let settingsReady = false;
+let settingsRevision = "";
 let saveQueue = Promise.resolve();
 let applyingSettings = false;
 
@@ -97,15 +98,27 @@ export const modelChoices = computed(() => customProviders.value.flatMap(provide
 
 export async function loadSettings() {
   if (settingsReady) return;
-  const { data } = await axios.get("/api/settings/get", { headers: { "Cache-Control": "no-cache", "x-toonflow-workspace": "1" } });
+  const response = await axios.get("/api/settings/get", { headers: { "Cache-Control": "no-cache", "x-toonflow-workspace": "1" } });
+  const { data } = response;
   if (settingsReady) return;
   if (data.code !== 200 || !data.data || typeof data.data !== "object" || Array.isArray(data.data)) {
     throw new Error("读取设置失败");
   }
   settings.value = data.data;
+  settingsRevision = response.headers.etag?.replace(/^W\//, "").replace(/^"|"$/g, "") || "";
   // 等初始化引发的监听执行完，再允许自动保存。
   await nextTick();
   settingsReady = true;
+}
+
+export async function reloadSettings() {
+  const response = await axios.get("/api/settings/get", { headers: { "Cache-Control": "no-cache", "x-toonflow-workspace": "1" } });
+  const { data } = response;
+  if (data.code !== 200 || !data.data || typeof data.data !== "object" || Array.isArray(data.data)) throw new Error("读取设置失败");
+  applyingSettings = true;
+  try { settings.value = data.data; }
+  finally { applyingSettings = false; }
+  settingsRevision = response.headers.etag?.replace(/^W\//, "").replace(/^"|"$/g, "") || settingsRevision;
 }
 
 export function saveSettings(update?: (current: Record<string, unknown>) => Record<string, unknown> | undefined) {
@@ -113,10 +126,12 @@ export function saveSettings(update?: (current: Record<string, unknown>) => Reco
   const saving = saveQueue.then(async () => {
     const patch = update?.(settings.value);
     if (update && !patch) return false;
-    const { data } = await axios.put<{ code: number; data: { customProviders?: CustomProvider[]; mediaProvider?: { id: string }; modelRefreshErrors?: string[] } | null }>(
-      "/api/settings/save", { settings: { ...settings.value, ...patch } }, { headers: { "x-toonflow-workspace": "1" } },
+    const response = await axios.put<{ code: number; data: { customProviders?: CustomProvider[]; mediaProvider?: { id: string }; modelRefreshErrors?: string[] } | null }>(
+      "/api/settings/save", { revision: settingsRevision || undefined, settings: { ...settings.value, ...patch } }, { headers: { "x-toonflow-workspace": "1" } },
     );
+    const { data } = response;
     if (data.code !== 200) throw new Error("保存设置失败");
+    settingsRevision = response.headers.etag?.replace(/^W\//, "").replace(/^"|"$/g, "") || settingsRevision;
     const providers = data.data?.customProviders;
     if ((patch && Object.hasOwn(patch, "customProviders")) || providers) invalidateNodeModels("language");
     if (patch || providers) {

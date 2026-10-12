@@ -6,7 +6,7 @@
 
 | 数据 | 默认位置 | 规则 |
 | --- | --- | --- |
-| 应用设置 | `<dataDirectory>/settings.json` | `conf` 单例，模式 `0600`，完整覆盖保存 |
+| 应用设置 | `<dataDirectory>/settings.json` | `conf` 单例，模式 `0600`，完整覆盖保存；桌面正式版位于系统用户数据目录 |
 | 节点 | `<dataDirectory>/nodes` | 安装/启用/卸载由 Server 管理 |
 | 工具 | `<dataDirectory>/tools` | 开发同步可覆盖同名副本 |
 | 扩展 | `<dataDirectory>/ext` | 由扩展初始化器装载 |
@@ -17,7 +17,9 @@
 | 构建产物 | `build/` | 可删除重建，不作为用户数据来源 |
 | 日志 | `logs/` 或部署指定目录 | 不提交，不保存密钥 |
 
-开发环境默认使用仓库根目录 `data/`；生产环境应使用安装目录同级的 `data/`，避免写入可更新的程序资源目录。`data/` 必须保持 Git 忽略。
+开发环境默认使用仓库根目录 `data/`；独立 Server 使用显式的 `TOONFLOW_DATA_DIR` 或仓库根目录 `data/`。桌面正式版使用系统用户数据目录，不写入可更新的应用包或安装目录。`data/` 必须保持 Git 忽略。
+
+桌面正式版默认目录：macOS 为 `~/Library/Application Support/Toonflow`，Windows 为 `%APPDATA%/Toonflow`，其他支持的平台为 `${XDG_CONFIG_HOME:-~/.config}/toonflow`。其中 `settings.json` 保存渠道、API Key、文本模型和媒体供应商配置，`providers/` 保存媒体供应商及其模型列表。
 
 ## 工作区文件
 

@@ -93,7 +93,7 @@
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from "vue";
 import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElLoading, ElImageViewer } from "element-plus";
 import { IconPhotoAi, IconSparkles, IconArrowUp, IconPlayerStop, IconTransfer, IconLayoutGrid, IconBrush, IconPencil } from "@tabler/icons-vue";
-import { groupNodeModels, nodeSkeleton, nodeTools, showNodeError, useNode, useNodeGeneration, useNodeReferences, z, type NodeMediaModel, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
+import { groupNodeModels, imageRatios, imageSizes, nodeSkeleton, nodeTools, showNodeError, useNode, useNodeGeneration, useNodeReferences, z, type NodeMediaModel, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import promptInput from "@toonflow/nodes-scaffold/promptInput";
 import referenceItem from "@toonflow/nodes-scaffold/referenceItem";
 import mediaHistory from "@toonflow/nodes-scaffold/mediaHistory";
@@ -140,8 +140,8 @@ const { generating } = generationState;
 let generation: Promise<void> | undefined;
 let modelsRequest: Promise<void> | undefined;
 const selectedModel = computed(() => models.value.find((item) => JSON.stringify([item.providerId, item.modelId]) === data.value.model));
-const allSizeOptions = computed(() => (selectedModel.value?.imageSizes?.length ? selectedModel.value.imageSizes : ["2K"]));
-const ratioOptions = computed(() => (selectedModel.value?.imageRatios?.length ? selectedModel.value.imageRatios : ["16:9"]));
+const allSizeOptions = computed(() => selectedModel.value?.imageSizes?.length ? selectedModel.value.imageSizes : [...imageSizes]);
+const ratioOptions = computed(() => selectedModel.value?.imageRatios?.length ? selectedModel.value.imageRatios : [...imageRatios]);
 const sizeOptions = computed(() => {
   const sizes = allSizeOptions.value;
   const [ratioWidth, ratioHeight] = data.value.ratio.split(":").map(Number);
@@ -158,7 +158,7 @@ watch(
   (choice) => {
     if (!choice) return;
     // ACT: 现有分辨率使用 K 单位；出现其他单位时再统一换算，未知名称排在数值选项之后。
-    if (!sizeOptions.value.includes(data.value.size)) data.value.size = sizeOptions.value.toSorted((left, right) =>
+    if (!sizeOptions.value.includes(data.value.size)) data.value.size = [...sizeOptions.value].sort((left, right) =>
       (Number.parseFloat(left) || Infinity) - (Number.parseFloat(right) || Infinity)
     )[0]!;
     if (!ratioOptions.value.includes(data.value.ratio)) data.value.ratio = ratioOptions.value.includes("16:9") ? "16:9" : ratioOptions.value[0]!;
@@ -345,8 +345,8 @@ nodeTools.register({
     const choice = args.modelId === undefined ? selectedModel.value
       : models.value.find((item) => item.providerId === args.providerId && item.modelId === args.modelId);
     if (!choice) throw new Error("请选择 getConfig 返回的有效图片模型");
-    const sizes = choice.imageSizes?.length ? choice.imageSizes : ["2K"];
-    const ratios = choice.imageRatios?.length ? choice.imageRatios : ["16:9"];
+    const sizes = choice.imageSizes?.length ? choice.imageSizes : [...imageSizes];
+    const ratios = choice.imageRatios?.length ? choice.imageRatios : [...imageRatios];
     if (args.size !== undefined && !sizes.includes(args.size)) throw new Error(`当前模型不支持分辨率 ${args.size}，可选：${sizes.join("、")}`);
     if (args.ratio !== undefined && !ratios.includes(args.ratio)) throw new Error(`当前模型不支持比例 ${args.ratio}，可选：${ratios.join("、")}`);
     data.value.model = JSON.stringify([choice.providerId, choice.modelId]);
