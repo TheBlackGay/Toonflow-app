@@ -6,6 +6,7 @@ import tfRouterMedia from "./src/media/tfRouter";
 import apiMart from "./src/media/apiMart";
 import metaso from "./src/media/metaso";
 import drawThings from "./src/media/drawThings";
+import mockVideo from "./src/media/mockVideo";
 
 export type Provider = ProviderDefinition;
 export type ProviderTools = ProviderContext["tool"];
@@ -13,4 +14,4 @@ export type AudioConvertOptions = Parameters<ProviderTools["audio"]["convert"]>[
 export type { FfmpegFactory, FfmpegCommand } from "@toonflow/ffmpeg/types";
 
 export const languageProviders = [tfRouterLanguage, deepSeek] as const;
-export const mediaProviders = [tfRouterMedia, apiMart, metaso, drawThings] as const;
+export const mediaProviders = [tfRouterMedia, apiMart, metaso, drawThings, mockVideo] as const;

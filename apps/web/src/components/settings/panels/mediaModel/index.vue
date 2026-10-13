@@ -35,7 +35,7 @@
       <el-button class="addButton" :icon="IconPlus" @click="openAdd('builtin')">添加供应商</el-button>
       <el-button class="addButton" :icon="IconSettings" @click="openAdd('custom')">添加自定义供应商</el-button>
     </div>
-    <component :is="mediaProviderDialog" v-model="providerDialogVisible" :mode="addMode" @added="saveProviderItem" />
+    <component :is="mediaProviderDialog" v-model="providerDialogVisible" :mode="addMode" :installedProviders="providers" @added="saveProviderItem" />
     <component :is="editProviderDialog" v-model="editorVisible" :provider="editingProvider" @saved="saveProviderItem" />
   </div>
 </template>

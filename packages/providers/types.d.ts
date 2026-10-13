@@ -99,6 +99,8 @@ interface ProviderTools {
    * @example const ffmpeg = await this.tool.ffmpeg(); const command = ffmpeg("assets/input.mp4").videoCodec("libx264");
    */
   ffmpeg(): Promise<import("@toonflow/ffmpeg/types").FfmpegFactory>;
+  /** 生成供本地验收使用的占位视频；仅由内置 mockVideo 供应商调用。 */
+  mockVideo(request: Pick<VideoRequest, "prompt" | "duration" | "ratio" | "resolution">): Promise<MediaAsset>;
 }
 
 interface ImageRequest extends MediaRequest {

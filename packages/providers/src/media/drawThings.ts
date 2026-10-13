@@ -40,6 +40,7 @@ const modelPresets: Record<string, ModelPreset> = {
   "z_image_1.0_i8x.ckpt": { type: "image", steps: 28, cfg: 4 },
   "krea_2_turbo_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
   "qwen_image_2.1_i8x.ckpt": { type: "image", steps: 40, cfg: 1, parameters: { shift: 1 } },
+  "qwen_image_2.1_turbo_i8x.ckpt": { type: "image", steps: 8, cfg: 1, parameters: { sampler: "DDIM Trailing", shift: 6.5 } },
   "ideogram_4_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
   "ideogram_4_fast_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
   "ideogram_4_instant_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
@@ -172,7 +173,7 @@ const qwenImageDimensions: Record<string, [number, number]> = {
 };
 
 function dimensions(model: string, ratio: string | undefined, requestedSize?: string) {
-  if (model === "qwen_image_2.1_i8x.ckpt") {
+  if (model === "qwen_image_2.1_i8x.ckpt" || model === "qwen_image_2.1_turbo_i8x.ckpt") {
     const fallback = qwenImageDimensions[ratio ?? "4:3"] ?? qwenImageDimensions["4:3"];
     const parsed = /^(\d+)x(\d+)$/i.exec(requestedSize ?? "");
     if (parsed) {

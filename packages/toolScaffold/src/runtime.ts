@@ -71,13 +71,16 @@ export interface CanvasContext extends CanvasInfo {
   call(request: CanvasToolCall, signal?: AbortSignal): Promise<unknown>;
 }
 
+export type MediaModelMode = "text" | "singleImage" | "multiReference" | "startEndRequired" | "endFrameOptional" | "startFrameOptional" | `imageReference:${number}` | `videoReference:${number}` | `audioReference:${number}`;
+
 export interface MediaModel {
   providerId: string;
   providerLabel: string;
+  providerVersion?: string;
   modelId: string;
   label: string;
   type: "image" | "video" | "audio";
-  mode?: unknown;
+  mode?: (MediaModelMode | MediaModelMode[])[];
   imageSizes?: string[];
   imageRatios?: string[];
   durationResolutionMap?: { duration: number[]; resolution: string[] }[];

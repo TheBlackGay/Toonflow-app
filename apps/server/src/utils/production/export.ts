@@ -1,14 +1,19 @@
-import { mkdir, unlink } from "@toonflow/file";
+import { mkdir, stat, unlink } from "@toonflow/file";
 import { dirname } from "node:path";
 import { createWorkspaceFfmpeg } from "@/utils/ffmpeg";
+import { workspaceRelativePathSchema } from "@/utils/production/contracts";
 import { resolveWorkspacePath } from "@/utils/workspace/files";
 import { readProductionManifest, writeProductionManifest } from "@/utils/production/shots";
 
 export async function exportProduction(directory: string, outputPath: string, inputPaths: string[], signal?: AbortSignal, onProgress?: (value: number) => void) {
   if (!inputPaths.length) throw Object.assign(new Error("至少需要一个视频片段"), { status: 400 });
-  if (inputPaths.some(path => !path || path.startsWith("/") || path.split(/[\\/]/).some(part => !part || part === "." || part === ".."))) throw Object.assign(new Error("视频路径必须是工作区内的相对路径"), { status: 400 });
-  if (!outputPath || outputPath.startsWith("/") || outputPath.split(/[\\/]/).some(part => !part || part === "." || part === "..")) throw Object.assign(new Error("输出路径必须是工作区内的相对路径"), { status: 400 });
-  await Promise.all(inputPaths.map(path => resolveWorkspacePath(directory, path)));
+  if (inputPaths.some(path => !workspaceRelativePathSchema.safeParse(path).success)) throw Object.assign(new Error("视频路径必须是工作区内的相对路径"), { status: 400 });
+  if (!workspaceRelativePathSchema.safeParse(outputPath).success) throw Object.assign(new Error("输出路径必须是工作区内的相对路径"), { status: 400 });
+  for (const inputPath of inputPaths) {
+    const input = await resolveWorkspacePath(directory, inputPath);
+    const info = await stat(input.path).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? undefined : Promise.reject(error));
+    if (!info?.isFile()) throw Object.assign(new Error(`视频片段不存在：${inputPath}`), { status: 409 });
+  }
   const output = await resolveWorkspacePath(directory, outputPath, true);
   const factory = await createWorkspaceFfmpeg(directory, signal);
   await mkdir(dirname(output.path), { recursive: true });

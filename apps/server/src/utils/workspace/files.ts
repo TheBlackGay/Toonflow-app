@@ -92,6 +92,16 @@ export function lockWorkspaceFiles(paths: string[]) {
   return () => keys.forEach(path => busyFiles.delete(path));
 }
 
+export async function waitForWorkspaceFiles(paths: string[], attempts = 100, delay = 10) {
+  for (let attempt = 0; ; attempt++) {
+    try { return lockWorkspaceFiles(paths); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EBUSY" || attempt >= attempts) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 export function protectWorkspaceRoot(directory: string, path: string) {
   if (directory === path) throw Object.assign(new Error("不能修改工作区根目录"), { status: 400 });
 }

@@ -1,10 +1,22 @@
 import { mkdir, readFile, writeAtomic } from "@toonflow/file";
 import { join } from "node:path";
+import { z } from "zod";
 import { exportProduction } from "@/utils/production/export";
-import { lockWorkspaceFiles, resolveWorkspacePath } from "@/utils/workspace/files";
+import { exportTaskStatusSchema, workspaceRelativePathSchema, type ExportTaskStatus } from "@/utils/production/contracts";
+import { resolveWorkspacePath, waitForWorkspaceFiles } from "@/utils/workspace/files";
 
-export type ExportTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type ExportTask = { id: string; directory: string; outputPath: string; inputPaths: string[]; status: ExportTaskStatus; progress: number; createdAt: string; updatedAt: string; error?: string };
+const storedExportTaskSchema = z.object({
+  id: z.uuid(),
+  directory: z.string().min(1).max(4096),
+  outputPath: workspaceRelativePathSchema,
+  inputPaths: z.array(workspaceRelativePathSchema).min(1).max(1000),
+  status: exportTaskStatusSchema,
+  progress: z.number().finite().min(0).max(100),
+  createdAt: z.string().trim().min(1),
+  updatedAt: z.string().trim().min(1),
+  error: z.string().max(10000).optional(),
+});
 const controllers = new Map<string, AbortController>();
 const recovered = new Set<string>();
 
@@ -15,12 +27,20 @@ async function taskPath(directory: string) {
 async function readTasks(directory: string) {
   const path = await taskPath(directory);
   const content = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? "[]" : Promise.reject(error));
-  const value = JSON.parse(content);
-  return Array.isArray(value) ? value as ExportTask[] : [];
+  try {
+    const value = JSON.parse(content);
+    if (!Array.isArray(value)) return [];
+    const parsed = value.map(item => storedExportTaskSchema.safeParse(item));
+    if (parsed.some(item => !item.success)) throw new Error("导出任务记录格式无效");
+    return parsed.map(item => item.data) as ExportTask[];
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("导出任务 JSON 格式无效", { cause: error });
+    throw error;
+  }
 }
 async function mutate<T>(directory: string, update: (tasks: ExportTask[]) => T) {
   const path = await taskPath(directory);
-  const release = lockWorkspaceFiles([path]);
+  const release = await waitForWorkspaceFiles([path]);
   try {
     const tasks = await readTasks(directory);
     const result = update(tasks);
@@ -58,9 +78,12 @@ async function run(task: ExportTask) {
 }
 
 export async function createExportTask(directory: string, outputPath: string, inputPaths: string[]) {
+  const output = workspaceRelativePathSchema.safeParse(outputPath);
+  const inputs = z.array(workspaceRelativePathSchema).min(1).max(1000).safeParse(inputPaths);
+  if (!output.success || !inputs.success) throw Object.assign(new Error("导出路径必须是工作区内的相对路径，且至少包含一个输入片段"), { status: 400 });
   await ensureRecovered(directory);
   const now = new Date().toISOString();
-  const task: ExportTask = { id: crypto.randomUUID(), directory, outputPath, inputPaths, status: "queued", progress: 0, createdAt: now, updatedAt: now };
+  const task: ExportTask = { id: crypto.randomUUID(), directory, outputPath: output.data, inputPaths: inputs.data, status: "queued", progress: 0, createdAt: now, updatedAt: now };
   await mutate(directory, tasks => { tasks.push(task); });
   void run(task).catch(() => {});
   return task;

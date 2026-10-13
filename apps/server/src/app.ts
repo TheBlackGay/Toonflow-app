@@ -14,7 +14,7 @@ import { languageRequest, resolveRequestLocale, runWithLocale, setLocaleFallback
 import { detectLocale, normalizeLocale } from "@toonflow/i18n";
 import { z } from "zod";
 
-const autoInstallProviders = ["tfRouter.ts", "apiMart.ts", "metaso.ts"];
+const autoInstallProviders = ["tfRouter.ts", "apiMart.ts", "metaso.ts", "mockVideo.ts"];
 
 export async function createApp({
   webRoot,

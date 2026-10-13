@@ -14,6 +14,7 @@
     "./media/tfRouter": "./src/media/tfRouter.ts",
     "./media/apiMart": "./src/media/apiMart.ts",
     "./media/metaso": "./src/media/metaso.ts",
-    "./media/drawThings": "./src/media/drawThings.ts"
+    "./media/drawThings": "./src/media/drawThings.ts",
+    "./media/mockVideo": "./src/media/mockVideo.ts"
   }
 }

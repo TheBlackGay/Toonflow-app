@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { MediaGenerationRequest, GeneratedMedia } from "@toonflow/tools-scaffold/runtime";
+import type { MediaGenerationRequest, GeneratedMedia, MediaModel } from "@toonflow/tools-scaffold/runtime";
 import { registerApiLanguage } from "@/lib/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
 
@@ -28,10 +28,14 @@ export type MediaTask = {
   mediaType: MediaType;
   request: MediaGenerationRequest;
   status: MediaTaskStatus;
+  attempt: number;
   createdAt: string;
   updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
   result?: GeneratedMedia[];
   error?: string;
+  errorCode?: string;
 };
 export type ExportTaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type ExportTask = {
@@ -47,6 +51,7 @@ export type ExportTask = {
 };
 
 type ApiResponse<T> = { code: number; data: T; message?: string };
+export type MediaHealth = { providerId: string; modelId?: string; reachable: boolean; modelAvailable?: boolean; capabilityKnown: boolean; message?: string };
 const client = axios.create({ baseURL: "/api", headers: { "x-toonflow-workspace": "1" } });
 registerApiLanguage(client);
 
@@ -72,7 +77,28 @@ export default function useProduction(directory?: string) {
   }
 
   return {
+    listMediaModels: async (signal?: AbortSignal) => {
+      try {
+        const response = await client.get<ApiResponse<MediaModel[]>>("/ai/media/models", { signal });
+        if (response.data.code < 200 || response.data.code >= 300) throw new Error(response.data.message || "读取媒体模型失败");
+        return response.data.data;
+      } catch (error) {
+        if (axios.isAxiosError<{ message?: string }>(error) && error.response?.data?.message) throw new Error(error.response.data.message);
+        throw error;
+      }
+    },
+    checkMediaHealth: async (providerId: string, modelId: string, signal?: AbortSignal) => {
+      try {
+        const response = await client.get<ApiResponse<MediaHealth>>("/providers/media/health", { params: { providerId, modelId }, signal });
+        if (response.data.code < 200 || response.data.code >= 300) throw new Error(response.data.message || "检查媒体供应商失败");
+        return response.data.data;
+      } catch (error) {
+        if (axios.isAxiosError<{ message?: string }>(error) && error.response?.data?.message) throw new Error(error.response.data.message);
+        throw error;
+      }
+    },
     getManifest: (signal?: AbortSignal) => request<ProductionManifest>("get", "/production/shots/get", undefined, signal),
+    fromScript: (script: string, signal?: AbortSignal) => request<ProductionManifest>("post", "/production/shots/fromScript", { script }, signal),
     saveManifest: (shots: ProductionShot[], signal?: AbortSignal) => request<ProductionManifest>("put", "/production/shots/save", { shots }, signal),
     updateShot: (shot: ProductionShot, signal?: AbortSignal) => request<ProductionManifest>("patch", "/production/shots/update", { shot }, signal),
     createShotTasks: (shotIds: string[], providerId: string, modelId: string, mediaType?: MediaType, signal?: AbortSignal) =>

@@ -2,9 +2,7 @@
   <el-container class="home">
     <bg class="pageBackground" />
     <el-header class="pageHeader">
-      <el-badge isDot :hidden="!hasDesktopUpdate">
-        <el-button round size="large" :icon="IconSettings" :aria-label="hasDesktopUpdate ? '设置，有新版本可用' : '设置'" @click="settingsVisible = true">设置</el-button>
-      </el-badge>
+      <el-button round size="large" :icon="IconSettings" aria-label="设置" @click="settingsVisible = true">设置</el-button>
       <div class="githubAction">
         <span class="arrowHint starHint">
           点个 Star 支持一下
@@ -102,7 +100,6 @@ import { createPastedTextFile, readTextAttachment } from "@/components/agent/tex
 import type { AgentAttachment } from "@/components/agent/types";
 import logoUrl from "@toonflow/assets/logo.svg";
 import { useWorkspaceStore, type Project } from "@/stores/workspace";
-import { hasDesktopUpdate } from "@/stores/desktopUpdate";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import settings from "@/components/settings/index.vue";
 import bg from "./bg.vue";

@@ -12,6 +12,7 @@ import { z } from "zod";
 import conf from "@/utils/conf";
 import { convertAudio } from "@/utils/media/audioProcessor";
 import { createWorkspaceFfmpeg } from "@/utils/ffmpeg";
+import { createMockVideo } from "@/utils/media/mockVideo";
 import { lockWorkspaceFiles, writeWorkspaceFile } from "@/utils/workspace/files";
 
 type Expression = Extract<ReturnType<typeof parseExpression>, { type: "ParenthesizedExpression" }>["expression"];
@@ -181,6 +182,15 @@ function migrateDrawThingsSource(source: string) {
     const marker = '  "krea_2_turbo_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },';
     if (source.includes(marker)) {
       migrated = migrated.replace(marker, `${marker}\n  "qwen_image_2.1_i8x.ckpt": { type: "image", steps: 40, cfg: 1, parameters: { shift: 1 } },`);
+    }
+  }
+  const refreshedPresetsStart = migrated.indexOf("const modelPresets");
+  const refreshedPresetsEnd = migrated.indexOf("};", refreshedPresetsStart);
+  const refreshedPresets = refreshedPresetsStart >= 0 && refreshedPresetsEnd > refreshedPresetsStart ? migrated.slice(refreshedPresetsStart, refreshedPresetsEnd) : "";
+  if (!refreshedPresets.includes('"qwen_image_2.1_turbo_i8x.ckpt"')) {
+    const marker = '  "qwen_image_2.1_i8x.ckpt": { type: "image", steps: 40, cfg: 1, parameters: { shift: 1 } },';
+    if (migrated.includes(marker)) {
+      migrated = migrated.replace(marker, `${marker}\n  "qwen_image_2.1_turbo_i8x.ckpt": { type: "image", steps: 8, cfg: 1, parameters: { sampler: "DDIM Trailing", shift: 6.5 } },`);
     }
   }
   return migrated;
@@ -586,6 +596,10 @@ export async function loadMediaProviderSource(source: string, config: Record<str
       ffmpeg: async () => {
         if (!cwd) throw new Error("当前操作没有工作目录，无法使用 FFmpeg");
         return createWorkspaceFfmpeg(cwd, signal);
+      },
+      mockVideo: async request => {
+        if (!cwd) throw new Error("当前操作没有工作目录，无法生成 Mock 视频");
+        return createMockVideo(cwd, request, signal);
       },
     } satisfies ProviderTools,
   };

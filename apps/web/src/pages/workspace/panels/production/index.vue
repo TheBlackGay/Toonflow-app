@@ -6,6 +6,7 @@
         <h1>{{ workspace.project?.name || "未命名工作区" }}</h1>
       </div>
       <div class="headerActions">
+        <el-button :loading="importing" :icon="IconFileImport" @click="importScript">从脚本导入</el-button>
         <el-button :loading="loading" :icon="IconRefresh" aria-label="刷新生产清单" @click="loadData">刷新</el-button>
         <el-button :loading="syncing" :icon="IconArrowsExchange" @click="sync">同步状态</el-button>
       </div>
@@ -18,11 +19,12 @@
         <div class="sectionToolbar">
           <div class="toolbarInfo">镜头 {{ manifest?.shots.length || 0 }} 个，已选 {{ selectedShots.length }} 个</div>
           <div class="toolbarActions">
-            <el-select v-model="generationProvider" class="providerSelect" placeholder="供应商" aria-label="生成供应商">
-              <el-option label="Draw Things" value="drawThings" />
-              <el-option label="OpenAI" value="openai" />
+            <el-select v-model="generationProvider" class="providerSelect" placeholder="供应商" aria-label="生成供应商" :disabled="!generationProviders.length">
+              <el-option v-for="provider in generationProviders" :key="provider.id" :label="provider.label" :value="provider.id" />
             </el-select>
-            <el-input v-model="generationModel" class="modelInput" placeholder="模型 ID" aria-label="生成模型" />
+            <el-select v-model="generationModel" class="modelInput" placeholder="模型" aria-label="生成模型" :disabled="!generationModels.length">
+              <el-option v-for="model in generationModels" :key="model.modelId" :label="model.label" :value="model.modelId" />
+            </el-select>
             <el-select v-model="generationMediaType" class="mediaSelect" aria-label="媒体类型">
               <el-option label="视频" value="video" />
               <el-option label="图片" value="image" />
@@ -66,6 +68,7 @@
           <el-table-column label="任务" width="110">
             <template #default="{ row }">
               <el-button v-if="taskForShot(asShot(row))?.status === 'failed' || taskForShot(asShot(row))?.status === 'cancelled'" text type="danger" :icon="IconRotate" @click.stop="retry(asShot(row))">重试</el-button>
+              <el-button v-else-if="['queued', 'running'].includes(taskForShot(asShot(row))?.status || '')" text type="warning" :icon="IconX" @click.stop="cancelTask(asShot(row))">取消</el-button>
               <span v-else-if="taskForShot(asShot(row))" class="taskStatus">{{ statusLabel(taskForShot(asShot(row))!.status) }}</span>
               <span v-else class="muted">-</span>
             </template>
@@ -94,11 +97,11 @@
         <div class="exportSection">
           <div class="sectionHeading"><span>导出成片</span><el-tag v-if="exportTask" :type="exportType" effect="plain">{{ statusLabel(exportTask.status) }}</el-tag></div>
           <el-input v-model="exportPath" placeholder="assets/production/final.mp4" aria-label="导出路径" />
-          <p class="exportHint">将使用 {{ exportInputs.length }} 个已生成片段，按镜头顺序拼接。</p>
+          <p class="exportHint">{{ exportReady ? `将使用 ${exportInputs.length} 个视频片段，按镜头顺序拼接。` : "需先为所有镜头生成视频，才能导出成片。" }}</p>
           <el-progress v-if="exportTask && ['queued', 'running'].includes(exportTask.status)" :percentage="Math.round(exportTask.progress)" :status="exportTask.status === 'running' ? undefined : 'warning'" />
           <p v-if="exportTask?.error" class="errorText">{{ exportTask.error }}</p>
           <div class="exportActions">
-            <el-button type="primary" :loading="exporting" :disabled="!exportInputs.length || !exportPath.trim() || exporting" :icon="IconDownload" @click="startExport">开始导出</el-button>
+            <el-button type="primary" :loading="exporting" :disabled="!exportReady || !exportPath.trim() || exporting" :icon="IconDownload" @click="startExport">开始导出</el-button>
             <el-button v-if="exportTask && ['queued', 'running'].includes(exportTask.status)" :icon="IconX" @click="cancelExport">取消</el-button>
           </div>
           <p v-if="exportTask?.status === 'completed'" class="successText">已导出：{{ exportTask.outputPath }}</p>
@@ -110,8 +113,9 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ElMessage, type TableInstance } from "element-plus";
-import { IconArrowsExchange, IconDeviceFloppy, IconDownload, IconPlayerPlay, IconRefresh, IconRotate, IconX } from "@tabler/icons-vue";
+import { ElMessage, ElMessageBox, type TableInstance } from "element-plus";
+import { IconArrowsExchange, IconDeviceFloppy, IconDownload, IconFileImport, IconPlayerPlay, IconRefresh, IconRotate, IconX } from "@tabler/icons-vue";
+import type { MediaModel } from "@toonflow/tools-scaffold/runtime";
 import { useWorkspaceStore } from "@/stores/workspace";
 import useProduction, { type ExportTask, type MediaTask, type MediaType, type ProductionManifest, type ProductionShot } from "@/lib/production";
 
@@ -120,15 +124,17 @@ const manifest = ref<ProductionManifest>();
 const selectedShots = ref<ProductionShot[]>([]);
 const selectedShot = ref<ProductionShot>();
 const mediaTasks = ref<MediaTask[]>([]);
+const mediaModels = ref<MediaModel[]>([]);
 const exportTask = ref<ExportTask>();
 const loading = ref(false);
 const saving = ref(false);
 const syncing = ref(false);
+const importing = ref(false);
 const generating = ref(false);
 const exporting = ref(false);
 const error = ref("");
-const generationProvider = ref("drawThings");
-const generationModel = ref("minimax_h3_ref2va_i6x.ckpt");
+const generationProvider = ref("mockVideo");
+const generationModel = ref("mock-video");
 const generationMediaType = ref<MediaType>("video");
 const exportPath = ref("assets/production/final.mp4");
 const shotTable = ref<TableInstance>();
@@ -136,7 +142,10 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let requestController: AbortController | undefined;
 
 const exportInputs = computed(() => (manifest.value?.shots || []).filter(shot => shot.outputPath).sort((left, right) => left.order - right.order).map(shot => shot.outputPath!));
+const exportReady = computed(() => Boolean(manifest.value?.shots.length) && manifest.value!.shots.every(shot => shot.mediaType === "video" && Boolean(shot.outputPath)));
 const exportType = computed(() => exportTask.value?.status === "failed" ? "danger" : exportTask.value?.status === "completed" ? "success" : "info");
+const generationModels = computed(() => mediaModels.value.filter(model => model.type === generationMediaType.value && model.providerId === generationProvider.value));
+const generationProviders = computed(() => [...new Map(mediaModels.value.filter(model => model.type === generationMediaType.value).map(model => [model.providerId, { id: model.providerId, label: model.providerLabel }])).values()]);
 
 function production() { return useProduction(); }
 function asShot(value: unknown) { return value as ProductionShot; }
@@ -150,6 +159,10 @@ function statusType(status: string) { return ({ draft: "info", queued: "warning"
 function onSelectionChange(rows: ProductionShot[]) { selectedShots.value = rows; }
 function selectShot(row: ProductionShot | null) { selectedShot.value = row || undefined; }
 function reportError(reason: unknown) { if (reason instanceof Error && reason.name === "CanceledError") return; error.value = reason instanceof Error ? reason.message : String(reason); }
+function syncGenerationSelection() {
+  if (!generationProviders.value.some(provider => provider.id === generationProvider.value)) generationProvider.value = generationProviders.value[0]?.id || "";
+  if (!generationModels.value.some(model => model.modelId === generationModel.value)) generationModel.value = generationModels.value[0]?.modelId || "";
+}
 
 async function loadData() {
   if (!workspace.project?.directory) return;
@@ -159,9 +172,11 @@ async function loadData() {
   error.value = "";
   try {
     const api = production();
-    const [nextManifest, tasks] = await Promise.all([api.getManifest(requestController.signal), api.listMediaTasks(requestController.signal)]);
+    const [nextManifest, tasks, models] = await Promise.all([api.getManifest(requestController.signal), api.listMediaTasks(requestController.signal), api.listMediaModels(requestController.signal)]);
     setManifest(nextManifest);
     mediaTasks.value = tasks;
+    mediaModels.value = models;
+    syncGenerationSelection();
     selectedShot.value = selectedShot.value ? nextManifest.shots.find(shot => shot.id === selectedShot.value?.id) : nextManifest.shots[0];
     if (selectedShot.value) shotTable.value?.setCurrentRow(selectedShot.value);
     schedulePoll();
@@ -174,19 +189,49 @@ async function sync() {
   catch (reason) { reportError(reason); }
   finally { syncing.value = false; }
 }
+async function importScript() {
+  const result = await ElMessageBox.prompt("每行输入一个镜头，导入后可继续编辑提示词和模型。", "从脚本导入镜头", {
+    inputType: "textarea",
+    inputPlaceholder: "例如：\n夜色中的城市街道\n主角推开旧仓库的大门",
+    inputValidator: value => value.trim() ? true : "请输入至少一行镜头内容",
+    confirmButtonText: "导入",
+    cancelButtonText: "取消",
+    closeOnClickModal: false,
+  }).catch(() => undefined);
+  if (!result?.value?.trim()) return;
+  importing.value = true;
+  try {
+    setManifest(await production().fromScript(result.value));
+    await refreshTasks();
+    ElMessage.success("脚本已导入为镜头");
+  } catch (reason) { reportError(reason); }
+  finally { importing.value = false; }
+}
 async function refreshTasks() {
   mediaTasks.value = await production().listMediaTasks();
   schedulePoll();
 }
 async function generateSelected() {
   generating.value = true;
-  try { const result = await production().createShotTasks(selectedShots.value.map(shot => shot.id), generationProvider.value, generationModel.value.trim(), generationMediaType.value); setManifest(result.manifest); await refreshTasks(); ElMessage.success(`已提交 ${result.tasks.length} 个生成任务`); }
+  try {
+    const api = production();
+    const health = await api.checkMediaHealth(generationProvider.value, generationModel.value.trim());
+    if (!health.reachable) throw new Error(health.message || "媒体供应商不可达");
+    if (health.modelAvailable === false) throw new Error(health.message || "所选媒体模型当前不可用");
+    const result = await api.createShotTasks(selectedShots.value.map(shot => shot.id), generationProvider.value, generationModel.value.trim(), generationMediaType.value);
+    setManifest(result.manifest); await refreshTasks(); ElMessage.success(`已提交 ${result.tasks.length} 个生成任务`);
+  }
   catch (reason) { reportError(reason); }
   finally { generating.value = false; }
 }
 async function retry(shot: ProductionShot) {
   if (!shot.taskId) return;
   try { await production().retryMediaTask(shot.taskId); await refreshTasks(); }
+  catch (reason) { reportError(reason); }
+}
+async function cancelTask(shot: ProductionShot) {
+  if (!shot.taskId) return;
+  try { await production().cancelMediaTask(shot.taskId); await refreshTasks(); }
   catch (reason) { reportError(reason); }
 }
 async function saveSelected() {
@@ -225,6 +270,8 @@ function schedulePoll() {
   }, 1500);
 }
 watch(() => workspace.project?.directory, () => { selectedShots.value = []; selectedShot.value = undefined; exportTask.value = undefined; loadData(); });
+watch(generationMediaType, syncGenerationSelection);
+watch(generationProvider, syncGenerationSelection);
 onMounted(loadData);
 onBeforeUnmount(() => { clearTimeout(pollTimer); requestController?.abort(); });
 </script>

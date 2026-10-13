@@ -9,10 +9,13 @@
     :closeOnClickModal="false"
     :closeOnPressEscape="!saving"
     :showClose="!saving">
-    <div v-if="mode === 'builtin'" class="providerPicker">
+    <div v-if="mode === 'builtin' && !availableProviders.length" class="providerEmpty">
+      <el-empty description="内置渠道已全部添加，可直接编辑已有渠道" />
+    </div>
+    <div v-else-if="mode === 'builtin'" class="providerPicker">
       <aside class="providerSidebar" aria-label="选择厂商">
         <button
-          v-for="item in mediaProviders"
+          v-for="item in availableProviders"
           :key="item.id"
           class="providerItem"
           type="button"
@@ -111,18 +114,20 @@ import tfRouterSource from "@toonflow/providers/media/tfRouter?raw";
 import apiMartSource from "@toonflow/providers/media/apiMart?raw";
 import metasoSource from "@toonflow/providers/media/metaso?raw";
 import drawThingsSource from "@toonflow/providers/media/drawThings?raw";
+import mockVideoSource from "@toonflow/providers/media/mockVideo?raw";
 import { validateDrawThingsModelId, validateDrawThingsParameters } from "@toonflow/providers/media/drawThings";
 import type { MediaProvider } from "./types";
 import { providerPrompt } from "./providerPrompt";
 import { reloadSettings } from "@/stores/settings";
 import { writeClipboardText } from "@/lib/clipboard";
 
-const { mode = "custom" } = defineProps<{ mode?: "builtin" | "custom" }>();
+const { mode = "custom", installedProviders = [] } = defineProps<{ mode?: "builtin" | "custom"; installedProviders?: MediaProvider[] }>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ added: [provider: MediaProvider] }>();
-const providerSources: Record<string, string> = { tfRouter: tfRouterSource, apiMart: apiMartSource, metaso: metasoSource, drawThings: drawThingsSource };
-const selectedProvider = ref<string>(mediaProviders[0]?.id ?? "");
-const activeProvider = computed(() => mediaProviders.find(provider => provider.id === selectedProvider.value));
+const providerSources: Record<string, string> = { tfRouter: tfRouterSource, apiMart: apiMartSource, metaso: metasoSource, drawThings: drawThingsSource, mockVideo: mockVideoSource };
+const availableProviders = computed(() => mediaProviders.filter(provider => !installedProviders.some(item => item.id === provider.id)));
+const selectedProvider = ref<string>(availableProviders.value[0]?.id ?? "");
+const activeProvider = computed(() => availableProviders.value.find(provider => provider.id === selectedProvider.value));
 const refreshedModels = ref<MediaProvider["models"]>();
 const models = computed<MediaProvider["models"]>(() => refreshedModels.value ?? activeProvider.value?.models ?? []);
 const providerReadme = computed(() => {
@@ -160,7 +165,7 @@ watch([activeTab, selectedProvider], () => {
 
 watch(visible, value => {
   if (!value) return;
-  selectedProvider.value = mediaProviders[0]?.id ?? "";
+  selectedProvider.value = availableProviders.value[0]?.id ?? "";
   activeTab.value = "file";
   promptExpanded.value = false;
   formApi.value = undefined;
@@ -402,6 +407,13 @@ async function copyPrompt() {
       border-bottom: 1px solid var(--el-border-color-lighter);
     }
   }
+}
+
+.providerEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
 }
 
 .dialogContent {
