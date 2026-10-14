@@ -43,7 +43,7 @@
 import { computed, defineAsyncComponent, ref, shallowRef, type Component } from "vue";
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import { customProviders, saveSettings, type CustomProvider } from "@/stores/settings";
+import { customProviders, reloadSettings, saveSettings, type CustomProvider } from "@/stores/settings";
 import { IconPlus, IconSettings, IconEdit, IconTrash, IconRefresh } from "@tabler/icons-vue";
 import { languageProviders } from "@toonflow/providers";
 import logoUrl from "@toonflow/assets/logo.svg";
@@ -79,13 +79,22 @@ function openCustomProvider(provider?: CustomProvider) {
 async function deleteProvider(id: string) {
   if (deletingId.value) return;
   deletingId.value = id;
+  const saveRemoval = () => saveSettings(settings => {
+    const current = settings.customProviders;
+    if (!Array.isArray(current)) throw new Error("配置格式错误");
+    if (!current.some(item => item?.id === id)) return;
+    return { customProviders: current.filter(item => item?.id !== id) };
+  });
   try {
-    await saveSettings(settings => {
-      const current = settings.customProviders;
-      if (!Array.isArray(current)) throw new Error("配置格式错误");
-      return { customProviders: current.filter(item => item?.id !== id) };
-    });
-  } catch { ElMessage.error("删除失败，请重试"); }
+    try { await saveRemoval(); }
+    catch (error) {
+      if (!axios.isAxiosError(error) || error.response?.data?.data?.code !== "SETTINGS_CONFLICT") throw error;
+      await reloadSettings();
+      await saveRemoval();
+    }
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "删除失败，请重试");
+  }
   finally { deletingId.value = ""; }
 }
 

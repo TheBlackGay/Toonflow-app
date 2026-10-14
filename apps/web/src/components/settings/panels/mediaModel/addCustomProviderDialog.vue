@@ -290,7 +290,9 @@ async function addProvider() {
     invalidateNodeModels("media");
     visible.value = false;
   } catch (error) {
-    const message = axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "添加失败，请重试";
+    const message = axios.isAxiosError(error)
+      ? error.response?.data?.message || (error.response?.status === 409 ? "供应商 ID 已存在或正在修改，请检查已添加的供应商，或刷新后重试" : error.message)
+      : error instanceof Error ? error.message : "添加失败，请重试";
     formError.value = addedProvider.value
       ? configSaved ? `供应商与连接配置已保存，但刷新页面设置失败：${message}。请重新打开设置。` : `供应商已添加，连接配置未保存：${message}。填写内容已保留，请重试。`
       : message;
