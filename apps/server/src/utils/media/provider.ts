@@ -80,7 +80,7 @@ function isDrawThingsLocalUrl(value: string) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
 }
 
-type DrawThingsRegistryEntry = { file?: unknown; name?: unknown };
+type DrawThingsRegistryEntry = { file?: unknown; name?: unknown; version?: unknown; modifier?: unknown; note?: unknown };
 
 const drawThingsDataDirectory = join(homedir(), "Library/Containers/com.liuliu.draw-things/Data");
 const drawThingsModelsDirectory = join(drawThingsDataDirectory, "Documents/Models");
@@ -117,7 +117,10 @@ async function listLocalDrawThingsModels() {
     if (!id || !installed.has(id) || seen.has(id)) return [];
     seen.add(id);
     const label = typeof item.name === "string" && item.name.trim() ? item.name.trim() : id.replace(/\.(?:ckpt|safetensors)$/i, "");
-    return [{ id, label, type: "image" as const, mode: ["text", "singleImage"] }];
+    const isVideo = item.version === "minimax_h3" || item.modifier === "ref2va" || /(?:fasth3|ref2va|fl2va)/i.test(`${id} ${label}`);
+    return [isVideo
+      ? { id, label, type: "video" as const, mode: ["singleImage"], audio: "optional" as const }
+      : { id, label, type: "image" as const, mode: ["text", "singleImage"] }];
   });
 }
 
@@ -155,7 +158,7 @@ async function providerMetadata(fileName: string, source: string) {
   if (result.id !== "drawThings") return result;
   const migrated = migrateDrawThingsSource(source);
   const normalized = migrated === source ? result : { ...metadata(fileName, migrated), revision: result.revision };
-  return { ...normalized, models: normalized.models.filter(model => model.type === "image") };
+  return normalized;
 }
 
 function migrateDrawThingsSource(source: string) {
@@ -352,7 +355,7 @@ function metadata(fileName: string, source: string) {
   const { id, label, version, readme, modelsUrl, rules, models } = parseProvider(source);
   if (fileName !== `${id}.ts`) invalid("供应商 ID 与文件名不一致");
   if (id === "drawThings") for (const model of models) {
-    if (model.type !== "image") continue;
+    if (model.type !== "image" && model.type !== "video") continue;
     try { validateDrawThingsModelId(model.id); }
     catch (error) { invalid(error instanceof Error ? error.message : String(error)); }
     if (model.parameters !== undefined) {
@@ -463,7 +466,7 @@ export async function saveMediaProvider(fileName: string, models: z.infer<typeof
   const checked = mediaModelsSchema.safeParse(models, validationOptions());
   if (!checked.success) invalid(checked.error.issues.map(issue => translateMessage(issue.message)).join("; "));
   if (fileName === "drawThings.ts") for (const model of checked.data) {
-    if (model.type !== "image") invalid("Draw Things 当前仅支持图片模型");
+    if (model.type !== "image" && model.type !== "video") invalid("Draw Things 当前仅支持图片和视频模型");
     try { validateDrawThingsModelId(model.id); }
     catch (error) { invalid(error instanceof Error ? error.message : String(error)); }
     if (model.parameters !== undefined) {
@@ -576,7 +579,6 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   await module.evaluate({ timeout: 1000 });
   signal?.throwIfAborted();
   const definition = { ...(module.namespace as { default: Provider }).default };
-  if (id === "drawThings") definition.generateVideo = undefined;
   const rules = Array.isArray(definition.rules) ? definition.rules : [];
   const providerConfig = { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...structuredClone(config) };
   const provider = {

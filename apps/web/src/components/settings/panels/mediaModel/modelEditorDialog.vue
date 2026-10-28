@@ -75,10 +75,10 @@
             </div>
           </el-form-item>
         </template>
-        <template v-if="providerId === 'drawThings' && draft.type === 'image'">
+        <template v-if="providerId === 'drawThings' && (draft.type === 'image' || draft.type === 'video')">
           <el-form-item label="Draw Things 模型参数（JSON）">
             <el-input v-model="modelParameters" type="textarea" dir="ltr" :rows="5" resize="vertical" aria-label="Draw Things 模型参数" placeholder='{&quot;steps&quot;:40,&quot;seed&quot;:123456,&quot;loras&quot;:[{&quot;name&quot;:&quot;style.safetensors&quot;,&quot;weight&quot;:0.8}]}' />
-            <el-text type="info">支持 seed、steps、sampler、sampler_name、seed_mode、guidance_scale、cfg_scale、shift、tea_cache、denoising_strength、image_guidance、loras 等图片字段。图生图不能同时设置 guidance_scale 和 cfg_scale。模型参数优先于供应商级参数。</el-text>
+            <el-text type="info">支持 seed、steps、sampler、cfg_scale、guidance_scale、shift、audio_shift、fps、num_frames 等 Draw Things 字段。图生图不能同时设置 guidance_scale 和 cfg_scale。模型参数优先于供应商级参数。</el-text>
           </el-form-item>
         </template>
         <details class="modelOptions">
@@ -105,7 +105,7 @@ const { model, models, providerId } = defineProps<{ model?: MediaProviderModel; 
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ confirmed: [model: MediaProviderModel] }>();
 const modelTypes = providerId === "drawThings"
-  ? [{ value: "image", label: "图片" }]
+  ? [{ value: "image", label: "图片" }, { value: "video", label: "视频" }]
   : [{ value: "image", label: "图片" }, { value: "video", label: "视频" }, { value: "audio", label: "音频" }];
 const imageModes = [
   { value: "text", label: "文生图" },
@@ -183,7 +183,7 @@ watch(visible, (isVisible) => {
     delete extra.audio;
     delete extra.durationResolutionMap;
   }
-  if (providerId === "drawThings" && draft.value.type === "image") {
+    if (providerId === "drawThings" && (draft.value.type === "image" || draft.value.type === "video")) {
     const configuredParameters = extra.parameters;
     modelParameters.value = configuredParameters && typeof configuredParameters === "object" && !Array.isArray(configuredParameters) ? JSON.stringify(configuredParameters, null, 2) : "{}";
     delete extra.parameters;
@@ -205,7 +205,7 @@ function confirmModel() {
     try { extra = JSON.parse(options.value); }
     catch { throw new Error("更多配置不是有效的 JSON"); }
     if (!extra || typeof extra !== "object" || Array.isArray(extra)) throw new Error("更多配置必须是 JSON 对象");
-    if (providerId === "drawThings" && draft.value.type === "image") {
+  if (providerId === "drawThings" && (draft.value.type === "image" || draft.value.type === "video")) {
       let parameters: unknown;
       try { parameters = JSON.parse(modelParameters.value); }
       catch { throw new Error("Draw Things 模型参数不是有效的 JSON"); }

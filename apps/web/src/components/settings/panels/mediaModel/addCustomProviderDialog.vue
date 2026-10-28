@@ -187,7 +187,7 @@ async function refreshDrawThingsModels() {
     });
     if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "读取 Draw Things 本地模型失败");
     refreshedModels.value = data.data;
-    if (!data.data.length) ElMessage.warning("未找到已注册且已安装的 Draw Things 图片模型");
+    if (!data.data.length) ElMessage.warning("未找到已注册且已安装的 Draw Things 图片或视频模型");
     else ElMessage.success(`已刷新 ${data.data.length} 个本地模型`);
   } catch (error) {
     formError.value = axios.isAxiosError(error) ? error.response?.data?.message || "读取 Draw Things 本地模型失败" : error instanceof Error ? error.message : "读取 Draw Things 本地模型失败";

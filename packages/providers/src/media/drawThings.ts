@@ -29,10 +29,12 @@ const rules = [
 const version = "0.5.0";
 
 type ModelPreset = {
-  type: "image";
+  type: "image" | "video";
   steps: number;
   cfg: number;
   parameters?: Record<string, unknown>;
+  fps?: number;
+  supportsAudio?: boolean;
 };
 
 const modelPresets: Record<string, ModelPreset> = {
@@ -44,6 +46,8 @@ const modelPresets: Record<string, ModelPreset> = {
   "ideogram_4_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
   "ideogram_4_fast_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
   "ideogram_4_instant_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
+  "minimax_h3_ref2va_i6x.ckpt": { type: "video", steps: 8, cfg: 1, fps: 24, supportsAudio: true, parameters: { sampler: "DDIM Trailing", shift: 12, audio_shift: 3 } },
+  "fasth3_omni_i8x.ckpt": { type: "video", steps: 8, cfg: 1, fps: 24, supportsAudio: true, parameters: { sampler: "DDIM Trailing", shift: 12, audio_shift: 3 } },
 };
 
 export function validateDrawThingsModelId(value: string) {
@@ -78,14 +82,14 @@ function extraParameters(value: unknown): Record<string, unknown> {
 function validateParameters(parameters: Record<string, unknown>): Record<string, unknown> {
   const allowed = new Set([
     "negative_prompt", "seed", "subseed", "subseed_strength", "sampler", "sampler_name", "seed_mode", "steps", "cfg_scale", "guidance_scale",
-    "shift", "tea_cache", "tiled_diffusion", "tiled_decoding", "clip_skip", "denoising_strength", "stochastic_sampling_gamma",
+    "shift", "audio_shift", "fps", "num_frames", "tea_cache", "tiled_diffusion", "tiled_decoding", "clip_skip", "denoising_strength", "stochastic_sampling_gamma",
     "speed_up_with_guidance_embed", "restore_faces", "upscaler", "hires_fix", "hires_fix_strength", "image_guidance", "loras", "strength",
   ]);
   for (const key of Object.keys(parameters)) if (!allowed.has(key)) throw new Error(`Draw Things 不支持模型参数“${key}”`);
   const numberRules: Record<string, [number, number]> = {
     seed: [-1, Number.MAX_SAFE_INTEGER], subseed: [-1, Number.MAX_SAFE_INTEGER], subseed_strength: [0, 1], steps: [1, 200],
     cfg_scale: [0, 50], guidance_scale: [0, 50], shift: [0, 20], clip_skip: [0, 12], denoising_strength: [0, 1],
-    stochastic_sampling_gamma: [0, 10], hires_fix_strength: [0, 1], image_guidance: [0, 50], strength: [0, 1],
+    stochastic_sampling_gamma: [0, 10], audio_shift: [0, 20], fps: [1, 120], num_frames: [1, 1000], hires_fix_strength: [0, 1], image_guidance: [0, 50], strength: [0, 1],
   };
   for (const [key, [min, max]] of Object.entries(numberRules)) {
     if (parameters[key] === undefined) continue;
@@ -189,12 +193,25 @@ function dimensions(model: string, ratio: string | undefined, requestedSize?: st
   return { width: 512, height: 512 };
 }
 
+function videoDimensions(ratio: string | undefined) {
+  if (ratio === "9:16") return { width: 768, height: 1152 };
+  if (ratio === "16:9") return { width: 1152, height: 768 };
+  return { width: 768, height: 768 };
+}
+
 function getPreset(model: string) {
   const preset = modelPresets[model];
   if (!model) return { type: "image", steps: 20, cfg: 4 } satisfies ModelPreset;
   if (!preset && /\.(?:ckpt|safetensors)$/i.test(model)) return { type: "image", steps: 20, cfg: 4 } satisfies ModelPreset;
   if (!preset) throw new Error(`Draw Things 未配置图片模型“${model}”的参数`);
   return preset;
+}
+
+function frameCount(duration: number | undefined, fps: number) {
+  if (!duration) return undefined;
+  const requested = Math.round(duration * fps);
+  // MiniMax H3 only accepts 1 or 17k + 5 frames.
+  return Math.max(5, Math.min(362, 5 + 17 * Math.round((requested - 5) / 17)));
 }
 
 async function responseErrorMessage(context: ProviderContext, response: Response) {
@@ -295,5 +312,37 @@ export default {
     if (body.guidance_scale === undefined) delete body.guidance_scale;
     if (request.images?.length) body.init_images = request.images.map(mediaUrl);
     return requestMedia(this, apiBaseUrl(this.config.baseUrl), request.images?.length ? "/sdapi/v1/img2img" : "/sdapi/v1/txt2img", body, "image");
+  },
+  async generateVideo(request: VideoRequest): Promise<MediaAsset[]> {
+    const model = request.model.trim();
+    const preset = modelPresets[model];
+    if (!preset || preset.type !== "video") throw new Error(`Draw Things 未配置视频模型“${model}”的参数`);
+    if (request.lastFrame || request.videos?.length || request.audios?.length) throw new Error("Draw Things Local 当前不支持尾帧、视频或音频参考");
+    const parameters = {
+      ...preset.parameters,
+      ...extraParameters(this.config.extraParameters),
+      ...modelParameters(request.other?.modelParameters),
+    };
+    const size = videoDimensions(request.ratio);
+    const fps = typeof parameters.fps === "number" ? parameters.fps : preset.fps ?? 24;
+    const body: Record<string, unknown> = {
+      prompt: request.prompt,
+      negative_prompt: "",
+      model,
+      width: size.width,
+      height: size.height,
+      steps: preset.steps,
+      cfg_scale: preset.cfg,
+      batch_size: 1,
+      num_frames: frameCount(request.duration, fps),
+      fps,
+      ...parameters,
+    };
+    if (body.num_frames === undefined) delete body.num_frames;
+    const firstFrame = request.firstFrame ?? request.images?.[0];
+    if (!firstFrame) throw new Error("FastH3 Omni 需要至少一张参考图片，请先上传参考图");
+    if (firstFrame) body.init_images = [mediaUrl(firstFrame)];
+    if (request.generateAudio !== undefined && preset.supportsAudio) body.generate_audio = request.generateAudio;
+    return requestMedia(this, apiBaseUrl(this.config.baseUrl), firstFrame ? "/sdapi/v1/img2img" : "/sdapi/v1/txt2img", body, "video");
   },
 } satisfies ProviderDefinition<typeof rules>;
