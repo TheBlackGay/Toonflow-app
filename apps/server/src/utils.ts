@@ -26,6 +26,7 @@ import * as mentionFiles from "@/agent/mentionFiles";
 import * as production from "@/utils/production/shots";
 import * as productionExport from "@/utils/production/export";
 import * as exportTasks from "@/utils/production/exportTasks";
+import * as networkProxy from "@/utils/network/proxy";
 
 export default {
   assets,
@@ -55,4 +56,5 @@ export default {
   personalization,
   mentionFiles,
   production: { ...production, ...productionExport, ...exportTasks },
+  networkProxy,
 };

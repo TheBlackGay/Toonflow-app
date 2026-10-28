@@ -39,6 +39,7 @@ import {
   IconPlugConnected,
   IconUserCog,
   IconSubtitlesAi,
+  IconWorld,
 } from "@tabler/icons-vue";
 
 const settingsPanels = [
@@ -62,6 +63,7 @@ const settingsPanels = [
   { id: "mcp", label: "MCP", icon: IconPlugConnected, groupLabel: "其他", component: defineAsyncComponent(() => import("./panels/mcp/index.vue")) },
   { id: "personalization", label: "个性化", icon: IconUserCog, component: defineAsyncComponent(() => import("./panels/personalization.vue")) },
   { id: "privacy", label: "隐私", icon: IconShieldLock, component: defineAsyncComponent(() => import("./panels/privacy.vue")) },
+  { id: "networkProxy", label: "网络代理", icon: IconWorld, component: defineAsyncComponent(() => import("./panels/networkProxy.vue")) },
   { id: "developer", label: "开发者选项", icon: IconCode, component: defineAsyncComponent(() => import("./panels/developer/index.vue")) },
   { id: "about", label: "关于", icon: IconInfoCircle, component: defineAsyncComponent(() => import("./panels/about.vue")) },
 ];
