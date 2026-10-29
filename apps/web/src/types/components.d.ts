@@ -101,6 +101,7 @@ declare module 'vue' {
     Menu: typeof import('./../components/agent/menu.vue')['default']
     MessageMarkdown: typeof import('./../components/messageMarkdown.vue')['default']
     ModelPopover: typeof import('./../components/modelPopover.vue')['default']
+    NetworkProxy: typeof import('./../components/settings/panels/networkProxy.vue')['default']
     Personalization: typeof import('./../components/settings/panels/personalization.vue')['default']
     PluginMarket: typeof import('./../components/settings/panels/pluginMarket/index.vue')['default']
     Privacy: typeof import('./../components/settings/panels/privacy.vue')['default']
