@@ -13,7 +13,7 @@
     <div v-show="expanded" class="proxyBody">
       <p class="proxyDescription">代理所有请求（API、Skills 下载等）。开启本地路由时，应用的请求也会经过此代理。留空表示直连。</p>
       <div class="proxyAddressRow">
-        <el-input v-model="proxyDraft" class="proxyAddress" :disabled="!editing" dir="ltr" aria-label="代理地址" placeholder="socks5://127.0.0.1:1080" />
+        <el-input v-model="proxyDraft" class="proxyAddress" :disabled="!editing" type="text" dir="ltr" aria-label="代理地址" placeholder="socks5://127.0.0.1:1080" />
         <el-button class="iconButton" :disabled="!proxyDraft" aria-label="测试代理地址" title="测试代理地址" @click="testProxy"><icon-search :size="20" /></el-button>
         <el-button class="iconButton" :aria-label="editing ? '取消编辑' : '编辑代理配置'" :title="editing ? '取消编辑' : '编辑代理配置'" @click="toggleEditing"><icon-pencil :size="20" /></el-button>
         <el-button class="iconButton" :disabled="!proxyDraft && !usernameDraft && !passwordDraft" aria-label="清空代理配置" title="清空代理配置" @click="clearProxy"><icon-x :size="20" /></el-button>
