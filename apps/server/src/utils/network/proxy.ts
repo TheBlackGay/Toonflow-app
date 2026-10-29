@@ -1,14 +1,12 @@
 import { URL } from "node:url";
-import undici from "undici";
-// @ts-expect-error Undici exposes this experimental dispatcher only through an internal path.
-import Socks5ProxyAgent from "undici/lib/dispatcher/socks5-proxy-agent";
+import { createSocksTransport } from "@/utils/network/socksTransport";
 
 type ProxyFetchInit = RequestInit & { proxy?: string };
 
 const originalFetch = globalThis.fetch;
 const originalPreconnect = originalFetch.preconnect;
 let outboundProxy: string | undefined;
-const socksAgents = new Map<string, InstanceType<typeof Socks5ProxyAgent>>();
+let socksTransport: ReturnType<typeof createSocksTransport> | undefined;
 
 export function parseOutboundProxy(value: unknown) {
   if (value === undefined || value === null || value === "") return undefined;
@@ -40,14 +38,7 @@ function createProxyFetch(proxy: string) {
   const fetchWithProxy = Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname)) return originalFetch.call(globalThis, input, init);
-    if (proxy.startsWith("socks5:") || proxy.startsWith("socks5h:")) {
-      let agent = socksAgents.get(proxy);
-      if (!agent) {
-        agent = new Socks5ProxyAgent(proxy);
-        socksAgents.set(proxy, agent);
-      }
-      return undici.fetch(input as never, { ...init, dispatcher: agent } as never) as Promise<Response>;
-    }
+    if (socksTransport) return socksTransport.fetch(input, init);
     const nextInit = { ...(init ?? {}), proxy } as ProxyFetchInit;
     return originalFetch.call(globalThis, input, nextInit);
   }, { preconnect: originalPreconnect });
@@ -57,8 +48,12 @@ function createProxyFetch(proxy: string) {
 export function configureOutboundProxy(value: unknown, options: { onInvalid?: (error: Error) => void } = {}) {
   try {
     const nextProxy = parseOutboundProxy(value);
+    if (nextProxy === outboundProxy) return nextProxy;
+    const previousTransport = socksTransport;
+    socksTransport = nextProxy?.startsWith("socks5:") || nextProxy?.startsWith("socks5h:") ? createSocksTransport(nextProxy) : undefined;
     outboundProxy = nextProxy;
     globalThis.fetch = nextProxy ? createProxyFetch(nextProxy) : originalFetch;
+    if (previousTransport) void previousTransport.close().catch(error => console.warn("关闭旧代理连接失败", error));
     return nextProxy;
   } catch (error) {
     const cause = error instanceof Error ? error : new Error("代理地址无效");
