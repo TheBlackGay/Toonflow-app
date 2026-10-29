@@ -21,8 +21,21 @@ export function parseOutboundProxy(value: unknown) {
   return url.href;
 }
 
+export function resolveOutboundProxy(value: unknown, username?: unknown, password?: unknown) {
+  const parsed = parseOutboundProxy(value);
+  if (!parsed) return undefined;
+  if (typeof username !== "undefined" && typeof username !== "string") throw new Error("代理用户名必须是字符串");
+  if (typeof password !== "undefined" && typeof password !== "string") throw new Error("代理密码必须是字符串");
+  const url = new URL(parsed);
+  if (username !== undefined) url.username = username;
+  if (password !== undefined) url.password = password;
+  return url.href;
+}
+
 function createProxyFetch(proxy: string) {
   const fetchWithProxy = Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname)) return originalFetch.call(globalThis, input, init);
     const nextInit = { ...(init ?? {}), proxy } as ProxyFetchInit;
     return originalFetch.call(globalThis, input, nextInit);
   }, { preconnect: originalPreconnect });

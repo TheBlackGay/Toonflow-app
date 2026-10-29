@@ -40,10 +40,13 @@ export async function createApp({
   // conf 由下方的路由动态加载，必须先确定整个进程共用的数据目录。
   if (dataDirectory) process.env.TOONFLOW_DATA_DIR = resolve(dataDirectory);
   const { default: conf } = await import("@/utils/conf");
-  const { configureOutboundProxy } = await import("@/utils/network/proxy");
-  configureOutboundProxy((conf.get("settings", {}).network as { outboundProxy?: unknown } | undefined)?.outboundProxy, {
-    onInvalid: error => console.warn(`Invalid outbound proxy configuration ignored (${error.message})`),
-  });
+  const { configureOutboundProxy, resolveOutboundProxy } = await import("@/utils/network/proxy");
+  const network = conf.get("settings", {}).network as { outboundProxy?: unknown; outboundProxyUsername?: unknown; outboundProxyPassword?: unknown } | undefined;
+  try {
+    configureOutboundProxy(resolveOutboundProxy(network?.outboundProxy, network?.outboundProxyUsername, network?.outboundProxyPassword));
+  } catch (error) {
+    console.warn(`Invalid outbound proxy configuration ignored (${error instanceof Error ? error.message : "invalid value"})`);
+  }
   setLocaleFallback(() => normalizeLocale((conf.get("settings", {}).ui as { language?: unknown } | undefined)?.language)
     ?? detectLocale([Intl.DateTimeFormat().resolvedOptions().locale]));
   if (dataDirectory && toolsRoot)

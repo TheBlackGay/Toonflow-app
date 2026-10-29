@@ -6,7 +6,7 @@ import { error, success } from "@/lib/responseFormat";
 import { maxSystemPromptLength } from "@/agent/runtime/prompt";
 import { t } from "@/lib/i18n";
 import { createHash } from "node:crypto";
-import { configureOutboundProxy, parseOutboundProxy } from "@/utils/network/proxy";
+import { configureOutboundProxy, parseOutboundProxy, resolveOutboundProxy } from "@/utils/network/proxy";
 
 const router = Router();
 
@@ -16,7 +16,7 @@ export default router.put("/", validateFields({
   network: z.object({ outboundProxy: z.string().trim().max(2048).refine(value => {
     try { parseOutboundProxy(value); return true; }
     catch { return false; }
-  }, "代理地址无效").optional() }).optional(),
+  }, "代理地址无效").optional(), outboundProxyUsername: z.string().max(512).optional(), outboundProxyPassword: z.string().max(2048).optional() }).optional(),
   agentSystemPrompt: z.string().max(maxSystemPromptLength, { error: () => t`系统提示词不能超过 ${maxSystemPromptLength} 个字符` }).optional(),
   mcp: z.object({ enabled: z.boolean().optional(), token: z.string().optional(), port: z.number().int().min(1).max(65535).optional() }).optional(),
   })),
@@ -31,7 +31,8 @@ export default router.put("/", validateFields({
     return;
   }
   u.conf.set("settings", settings);
-  configureOutboundProxy((settings.network as { outboundProxy?: unknown } | undefined)?.outboundProxy);
+  const network = settings.network as { outboundProxy?: unknown; outboundProxyUsername?: unknown; outboundProxyPassword?: unknown } | undefined;
+  configureOutboundProxy(resolveOutboundProxy(network?.outboundProxy, network?.outboundProxyUsername, network?.outboundProxyPassword));
   const [models] = await Promise.all([u.ai.refreshProviderModels(previousSettings), u.mcpRuntime.reloadMcpRuntime()]);
   const nextSettings = u.conf.get("settings", {});
   res.set("ETag", createHash("sha256").update(JSON.stringify(nextSettings)).digest("hex"));
