@@ -1,13 +1,14 @@
 import { URL } from "node:url";
-import nodeFetch from "node-fetch";
-import { SocksProxyAgent } from "socks-proxy-agent";
+import undici from "undici";
+// @ts-expect-error Undici exposes this experimental dispatcher only through an internal path.
+import Socks5ProxyAgent from "undici/lib/dispatcher/socks5-proxy-agent";
 
 type ProxyFetchInit = RequestInit & { proxy?: string };
 
 const originalFetch = globalThis.fetch;
 const originalPreconnect = originalFetch.preconnect;
 let outboundProxy: string | undefined;
-const socksAgents = new Map<string, SocksProxyAgent>();
+const socksAgents = new Map<string, InstanceType<typeof Socks5ProxyAgent>>();
 
 export function parseOutboundProxy(value: unknown) {
   if (value === undefined || value === null || value === "") return undefined;
@@ -39,13 +40,13 @@ function createProxyFetch(proxy: string) {
   const fetchWithProxy = Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname)) return originalFetch.call(globalThis, input, init);
-    if (proxy.startsWith("socks5:" ) || proxy.startsWith("socks5h:")) {
+    if (proxy.startsWith("socks5:") || proxy.startsWith("socks5h:")) {
       let agent = socksAgents.get(proxy);
       if (!agent) {
-        agent = new SocksProxyAgent(proxy);
+        agent = new Socks5ProxyAgent(proxy);
         socksAgents.set(proxy, agent);
       }
-      return nodeFetch(input as string | URL, { ...init, agent } as Parameters<typeof nodeFetch>[1]);
+      return undici.fetch(input as never, { ...init, dispatcher: agent } as never) as Promise<Response>;
     }
     const nextInit = { ...(init ?? {}), proxy } as ProxyFetchInit;
     return originalFetch.call(globalThis, input, nextInit);
