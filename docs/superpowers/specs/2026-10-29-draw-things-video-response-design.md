@@ -2,7 +2,7 @@
 
 ## 目标
 
-让 Toonflow 的 Draw Things 视频 Provider 同时兼容两类 Local API 响应：已经编码的视频文件，以及 `images` 字段返回的图片帧序列。两类结果都统一落盘为工作区内的 MP4 视频。
+让 Toonflow 的 Draw Things 视频 Provider 同时兼容两类 Local API 响应：已经编码的视频文件，以及 `images` 字段返回的图片帧序列。图片帧序列统一编码为工作区内的 MP4；已经编码的视频文件沿用其实际视频格式直接保存。
 
 ## 方案
 
@@ -20,7 +20,7 @@ Draw Things HTTP
                     video/mp4
 ```
 
-Provider 不根据 Draw Things UI 的保存选项猜测格式，而是以响应内容文件头为准。仅当 `images` 是非空数组且每一项都能解析为同一图片格式时才视为帧序列；帧序列按响应顺序编码，FPS 使用请求中实际发送的 FPS（默认 24）。已编码的 MP4/MOV/WEBM 由现有 MIME 和文件头识别后直接返回，最终输出扩展名跟随识别结果；PNG/JPEG 帧序列统一输出 MP4。
+Provider 不根据 Draw Things UI 的保存选项猜测格式，而是以响应内容文件头为准。仅当响应包含 `images` 字段时才进入帧序列分支：数组为空、同时存在视频字段或任一帧无法解析时立即报错；非空且全部为同一图片格式时按响应顺序编码，FPS 使用请求中实际发送的 FPS（默认 24）。没有 `images` 字段时再解析已编码的 MP4/MOV/WEBM；同时支持 `video/*`、`application/octet-stream` 或缺失 MIME 的文件头探测。
 
 ## 错误处理与清理
 

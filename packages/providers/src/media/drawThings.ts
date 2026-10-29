@@ -46,8 +46,8 @@ const modelPresets: Record<string, ModelPreset> = {
   "ideogram_4_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
   "ideogram_4_fast_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
   "ideogram_4_instant_i8x.ckpt": { type: "image", steps: 8, cfg: 1 },
-  "minimax_h3_ref2va_i6x.ckpt": { type: "video", steps: 8, cfg: 1, fps: 24, supportsAudio: true, parameters: { sampler: "DDIM Trailing", shift: 12, audio_shift: 3 } },
-  "fasth3_omni_i8x.ckpt": { type: "video", steps: 8, cfg: 1, fps: 24, supportsAudio: true, parameters: { sampler: "DDIM Trailing", shift: 12, audio_shift: 3 } },
+  "minimax_h3_ref2va_i6x.ckpt": { type: "video", steps: 8, cfg: 1, fps: 24, supportsAudio: true, parameters: { sampler: "DDIM Trailing", shift: 12 } },
+  "fasth3_omni_i8x.ckpt": { type: "video", steps: 8, cfg: 1, fps: 24, supportsAudio: true, parameters: { sampler: "DDIM Trailing", shift: 12 } },
 };
 
 export function validateDrawThingsModelId(value: string) {
@@ -61,7 +61,7 @@ export function validateDrawThingsModelId(value: string) {
 function mediaUrl(input: MediaInput) {
   if (input.type === "url") return input.url;
   const data = input.type === "binary" ? Buffer.from(input.data).toString("base64") : input.data;
-  return data.startsWith("data:") ? data : `data:${input.mimeType};base64,${data}`;
+  return data.startsWith("data:") ? data.slice(data.indexOf(",") + 1) : data;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -169,6 +169,12 @@ function findAsset(value: unknown, mediaType: "image" | "video"): MediaAsset | u
   return undefined;
 }
 
+function encodedVideoMime(data: Uint8Array, fallback = "video/mp4") {
+  const header = Buffer.from(data.subarray(0, 16)).toString("ascii");
+  if (header.slice(4, 8) !== "ftyp") return undefined;
+  return header.slice(8, 12) === "qt  " ? "video/quicktime" : fallback;
+}
+
 const qwenImageDimensions: Record<string, [number, number]> = {
   "4:3": [2400, 1792],
   "3:4": [1792, 2400],
@@ -242,11 +248,30 @@ async function requestMedia(context: ProviderContext, baseUrl: string, path: str
       const detail = await responseErrorMessage(context, response);
       throw apiError(`Draw Things ${mediaType === "image" ? "图片" : "视频"}请求失败：HTTP ${response.status}${detail ? `：${detail}` : ""}`);
     }
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
-    if (contentType?.startsWith(`${mediaType}/`)) {
-      return [{ mediaType, type: "binary", mimeType: contentType, data: new Uint8Array(await response.arrayBuffer()) } satisfies MediaAsset];
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() ?? "";
+    if (contentType.startsWith(`${mediaType}/`) || (mediaType === "video" && contentType === "application/octet-stream")) {
+      const data = new Uint8Array(await response.arrayBuffer());
+      const mimeType = contentType.startsWith("video/") ? contentType : encodedVideoMime(data);
+      if (mimeType) return [{ mediaType, type: "binary", mimeType, data } satisfies MediaAsset];
+      throw apiError("Draw Things 返回了无法识别的视频文件");
+    }
+    if (mediaType === "video" && !contentType) {
+      const data = new Uint8Array(await response.clone().arrayBuffer());
+      const mimeType = encodedVideoMime(data);
+      if (mimeType) return [{ mediaType, type: "binary", mimeType, data } satisfies MediaAsset];
     }
     const result = await response.json() as unknown;
+    const responseImages = object(result).images;
+    if (mediaType === "video" && responseImages !== undefined) {
+      if (!Array.isArray(responseImages) || !responseImages.length || ["video", "video_url", "videoUrl"].some(key => object(result)[key] !== undefined)) throw apiError("Draw Things 返回了空或混合的视频结果");
+      const fps = typeof body.fps === "number" && body.fps > 0 ? body.fps : 24;
+      const frames = responseImages.map((frame: unknown) => {
+        const asset = findAsset(frame, "image");
+        if (!asset) throw apiError("Draw Things 返回了无法识别的视频帧");
+        return { ...asset, mediaType: "video" as const, sequence: { fps } };
+      });
+      if (frames.length) return frames;
+    }
     const found = findAsset(result, mediaType);
     if (!found) throw apiError(`Draw Things 未返回已编码${mediaType === "image" ? "图片" : "视频"}`);
     return [found];
@@ -342,7 +367,6 @@ export default {
     const firstFrame = request.firstFrame ?? request.images?.[0];
     if (!firstFrame) throw new Error("FastH3 Omni 需要至少一张参考图片，请先上传参考图");
     if (firstFrame) body.init_images = [mediaUrl(firstFrame)];
-    if (request.generateAudio !== undefined && preset.supportsAudio) body.generate_audio = request.generateAudio;
     return requestMedia(this, apiBaseUrl(this.config.baseUrl), firstFrame ? "/sdapi/v1/img2img" : "/sdapi/v1/txt2img", body, "video");
   },
 } satisfies ProviderDefinition<typeof rules>;

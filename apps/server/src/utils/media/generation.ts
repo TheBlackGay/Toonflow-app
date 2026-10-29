@@ -1,11 +1,13 @@
 import { t, translateMessage } from "@/lib/i18n";
-import { mkdir, readFile, realpath, stat, unlink } from "@toonflow/file";
+import { mkdir, readFile, realpath, rm, stat, unlink } from "@toonflow/file";
 import { join, relative } from "node:path";
 import { mediaProviders, type Provider } from "@toonflow/providers";
 import type { GeneratedMedia, MediaGenerationRequest, MediaModel, MediaReference } from "@toonflow/tools-scaffold/runtime";
 import conf from "@/utils/conf";
 import { getMediaProvider, listMediaProviders, loadMediaProviderSource } from "@/utils/media/provider";
 import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
+import { createWorkspaceFfmpeg } from "@/utils/ffmpeg";
+import type { FfmpegCommand } from "@toonflow/ffmpeg";
 
 const maxMediaSize = 100 * 1024 * 1024;
 const mediaExtensions: Record<string, string> = {
@@ -143,6 +145,50 @@ async function assetBytes(asset: MediaAsset, mediaType: "image" | "video" | "aud
   return { bytes, mimeType };
 }
 
+function runFfmpeg(command: FfmpegCommand, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  const cancel = () => command.kill("SIGKILL");
+  signal?.addEventListener("abort", cancel, { once: true });
+  return new Promise<void>((resolve, reject) => {
+    command.on("error", error => reject(signal?.aborted ? signal.reason : error));
+    command.on("end", () => signal?.aborted ? reject(signal.reason) : resolve());
+    command.run();
+  }).finally(() => signal?.removeEventListener("abort", cancel));
+}
+
+async function encodeImageSequence(directory: string, assets: MediaAsset[], fps: number, signal?: AbortSignal) {
+  const temporaryDirectory = `.toonflow/media-frames-${crypto.randomUUID()}`;
+  const temporaryPath = (name: string) => `${temporaryDirectory}/${name}`;
+  await mkdir(await resolveWorkspacePath(directory, temporaryDirectory, true).then(result => result.path), { recursive: true });
+  try {
+    let frameExtension = "";
+    let totalBytes = 0;
+    for (let index = 0; index < assets.length; index++) {
+      const asset = { ...assets[index], mediaType: "image" as const };
+      const { bytes, mimeType } = await assetBytes(asset, "image", signal);
+      const extension = mediaExtensions[mimeType];
+      if (!frameExtension) frameExtension = extension;
+      if (extension !== frameExtension) throw new Error("Draw Things 返回的视频帧格式不一致");
+      totalBytes += bytes.byteLength;
+      if (totalBytes > maxMediaSize) throw new Error("视频帧序列超过 100 MB");
+      await writeWorkspaceFile((await resolveWorkspacePath(directory, temporaryPath(`frame-${String(index + 1).padStart(6, "0")}.${extension}`))).path, bytes, true);
+    }
+    const output = temporaryPath("output.mp4");
+    const ffmpeg = await createWorkspaceFfmpeg(directory, signal);
+    const command = ffmpeg(temporaryPath(`frame-%06d.${frameExtension}`))
+      .inputOptions("-framerate", String(fps))
+      .output(output)
+      .videoCodec("libx264")
+      .format("mp4")
+      .videoFilters("pad=ceil(iw/2)*2:ceil(ih/2)*2")
+      .outputOptions("-pix_fmt", "yuv420p", "-movflags", "+faststart");
+    await runFfmpeg(command, signal);
+    return { mediaType: "video" as const, type: "binary" as const, mimeType: "video/mp4", data: await readFile((await resolveWorkspacePath(directory, output)).path) };
+  } finally {
+    await rm((await resolveWorkspacePath(directory, temporaryDirectory, true)).path, { recursive: true, force: true });
+  }
+}
+
 export async function generateMedia(
   cwd: string,
   mediaType: "image" | "video" | "audio",
@@ -167,7 +213,7 @@ export async function generateMedia(
   const references = async (items: MediaReference[] | undefined, type: string) => items ? Promise.all(items.map(item => readReference(directory, item, type, signal))) : undefined;
   const images = await references(request.images, "image");
   signal?.throwIfAborted();
-  const assets = mediaType === "audio"
+  let assets = mediaType === "audio"
     ? await provider.generateAudio!({
       model: request.modelId, text: request.prompt, images, audios: await references(request.audios, "audio"),
       voice: request.voice, speed: request.speed, volume: request.volume, pitch: request.pitch, language: request.language, format: request.format, sampleRate: request.sampleRate,
@@ -183,6 +229,12 @@ export async function generateMedia(
       generateAudio: request.generateAudio, mode: request.mode,
     });
   if (!Array.isArray(assets) || !assets.length) invalid("供应商未返回生成结果");
+  const sequenceAssets = assets.filter(asset => asset.sequence);
+  if (mediaType === "video" && sequenceAssets.length) {
+    if (sequenceAssets.length > 1000) invalid("供应商返回的视频帧数超过 1000 帧");
+    if (sequenceAssets.length !== assets.length || sequenceAssets.some(asset => !asset.sequence || asset.sequence.fps <= 0)) invalid("供应商返回了无效的视频帧序列");
+    assets = [await encodeImageSequence(directory, assets, sequenceAssets[0]!.sequence!.fps, signal)];
+  }
   const written: string[] = [];
   const result: GeneratedMedia[] = [];
   try {

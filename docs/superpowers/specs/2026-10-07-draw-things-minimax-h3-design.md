@@ -24,7 +24,7 @@ Provider 将 Toonflow 的 base64 参考媒体转换为 data URL，仅映射模�
 
 1. 真实样例中约定的视频字段中的 HTTP URL、data URL、base64 或二进制结果。
 2. 如果真实接口是异步任务，Provider 按样例中的任务创建、状态查询和完成字段轮询，直到得到已编码视频。
-3. `images` 帧序列、缺少完成状态的视频任务 ID 和其他未知响应形态均视为空结果并抛出错误；帧序列转 MP4 不在本次范围内。
+3. 缺少完成状态的视频任务 ID 和其他未知响应形态均视为空结果并抛出错误。`images` 帧序列的兼容处理已由 [2026-10-29 Draw Things 视频响应兼容设计](./2026-10-29-draw-things-video-response-design.md) 补充。
 
 ## 数据流
 

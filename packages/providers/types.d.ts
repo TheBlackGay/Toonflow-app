@@ -55,7 +55,7 @@ type MediaInput =
   | { type: "base64"; data: string; mimeType: string }
   | { type: "binary"; data: Uint8Array; mimeType: string };
 
-type MediaAsset = MediaInput & { mediaType: "image" | "video" | "audio" };
+type MediaAsset = MediaInput & { mediaType: "image" | "video" | "audio"; sequence?: { fps: number } };
 
 interface AudioConvertOptions {
   format: "wav" | "mp3";
