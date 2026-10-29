@@ -171,6 +171,7 @@ function findAsset(value: unknown, mediaType: "image" | "video"): MediaAsset | u
 
 function encodedVideoMime(data: Uint8Array, fallback = "video/mp4") {
   const header = Buffer.from(data.subarray(0, 16)).toString("ascii");
+  if (data[0] === 0x1a && data[1] === 0x45 && data[2] === 0xdf && data[3] === 0xa3) return "video/webm";
   if (header.slice(4, 8) !== "ftyp") return undefined;
   return header.slice(8, 12) === "qt  " ? "video/quicktime" : fallback;
 }
@@ -263,7 +264,7 @@ async function requestMedia(context: ProviderContext, baseUrl: string, path: str
     const result = await response.json() as unknown;
     const responseImages = object(result).images;
     if (mediaType === "video" && responseImages !== undefined) {
-      if (!Array.isArray(responseImages) || !responseImages.length || ["video", "video_url", "videoUrl"].some(key => object(result)[key] !== undefined)) throw apiError("Draw Things 返回了空或混合的视频结果");
+      if (!Array.isArray(responseImages) || !responseImages.length || ["video", "video_url", "videoUrl", "videos", "outputs", "data"].some(key => object(result)[key] !== undefined)) throw apiError("Draw Things 返回了空或混合的视频结果");
       const fps = typeof body.fps === "number" && body.fps > 0 ? body.fps : 24;
       const frames = responseImages.map((frame: unknown) => {
         const asset = findAsset(frame, "image");
