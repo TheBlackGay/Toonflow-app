@@ -1,10 +1,13 @@
 import { URL } from "node:url";
+import nodeFetch from "node-fetch";
+import { SocksProxyAgent } from "socks-proxy-agent";
 
 type ProxyFetchInit = RequestInit & { proxy?: string };
 
 const originalFetch = globalThis.fetch;
 const originalPreconnect = originalFetch.preconnect;
 let outboundProxy: string | undefined;
+const socksAgents = new Map<string, SocksProxyAgent>();
 
 export function parseOutboundProxy(value: unknown) {
   if (value === undefined || value === null || value === "") return undefined;
@@ -36,6 +39,14 @@ function createProxyFetch(proxy: string) {
   const fetchWithProxy = Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname)) return originalFetch.call(globalThis, input, init);
+    if (proxy.startsWith("socks5:" ) || proxy.startsWith("socks5h:")) {
+      let agent = socksAgents.get(proxy);
+      if (!agent) {
+        agent = new SocksProxyAgent(proxy);
+        socksAgents.set(proxy, agent);
+      }
+      return nodeFetch(input as string | URL, { ...init, agent } as Parameters<typeof nodeFetch>[1]);
+    }
     const nextInit = { ...(init ?? {}), proxy } as ProxyFetchInit;
     return originalFetch.call(globalThis, input, nextInit);
   }, { preconnect: originalPreconnect });

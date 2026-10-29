@@ -24,6 +24,7 @@
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@toonflow/ffmpeg": "workspace:*",
     "@toonflow/file": "workspace:*",
+    "@toonflow/i18n": "workspace:*",
     "@toonflow/mcp": "workspace:*",
     "@toonflow/providers": "workspace:*",
     "@toonflow/teams-scaffold": "workspace:*",
@@ -36,9 +37,10 @@
     "fast-glob": "^3.3.3",
     "fflate": "^0.8.3",
     "morgan": "^1.12.1",
+    "node-fetch": "^3.3.2",
+    "socks-proxy-agent": "^10.1.0",
     "wavefile": "^11.0.0",
-    "zod": "^4.6.2",
-    "@toonflow/i18n": "workspace:*"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
