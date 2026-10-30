@@ -9,7 +9,6 @@ import buildRoute from "@/core";
 import { error } from "@/lib/responseFormat";
 import desktopRequest from "@/lib/desktop";
 import initializePlugins from "@/utils/plugins/initialize";
-import { preserveMediaProviderModels } from "@/utils/media/provider";
 import { languageRequest, resolveRequestLocale, runWithLocale, setLocaleFallback, translateError, translateMessage } from "@/lib/i18n";
 import { detectLocale, normalizeLocale } from "@toonflow/i18n";
 import { z } from "zod";
@@ -58,6 +57,7 @@ export async function createApp({
   }
   // ACT: 内置媒体供应商随构建同步，其他供应商文件和独立保存的配置保留。
   if (dataDirectory && providersRoot) {
+    const { preserveMediaProviderModels } = await import("@/utils/media/provider");
     const sourceDirectory = resolve(providersRoot, "media");
     let providerRevision = pluginRevision;
     if (providerRevision === undefined) {

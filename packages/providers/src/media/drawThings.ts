@@ -64,6 +64,27 @@ function mediaUrl(input: MediaInput) {
   return data.startsWith("data:") ? data.slice(data.indexOf(",") + 1) : data;
 }
 
+function imageDimensions(input: MediaInput) {
+  const data = input.type === "binary" ? Buffer.from(input.data) : Buffer.from(input.type === "base64" ? input.data : "", "base64");
+  if (data.length >= 24 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) {
+    return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+  }
+  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) return undefined;
+  let offset = 2;
+  while (offset + 9 < data.length) {
+    if (data[offset] !== 0xff) { offset += 1; continue; }
+    const marker = data[offset + 1];
+    if (marker === 0xd8 || marker === 0xd9) { offset += 2; continue; }
+    const length = data.readUInt16BE(offset + 2);
+    if (length < 2 || offset + 2 + length > data.length) return undefined;
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) {
+      return { width: data.readUInt16BE(offset + 7), height: data.readUInt16BE(offset + 5) };
+    }
+    offset += 2 + length;
+  }
+  return undefined;
+}
+
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -204,6 +225,14 @@ function videoDimensions(ratio: string | undefined) {
   if (ratio === "9:16") return { width: 768, height: 1152 };
   if (ratio === "16:9") return { width: 1152, height: 768 };
   return { width: 768, height: 768 };
+}
+
+function requestedVideoDimensions(resolution: string | undefined) {
+  const match = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(resolution?.trim() ?? "");
+  if (!match) return undefined;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width > 0 && height > 0 ? { width, height } : undefined;
 }
 
 function getPreset(model: string) {
@@ -349,7 +378,10 @@ export default {
       ...extraParameters(this.config.extraParameters),
       ...modelParameters(request.other?.modelParameters),
     };
-    const size = videoDimensions(request.ratio);
+    const firstFrame = request.firstFrame ?? request.images?.[0];
+    if (!firstFrame) throw new Error("FastH3 Omni 需要至少一张参考图片，请先上传参考图");
+    // Draw Things 要求 img2img 的 init_images 与 width/height 完全一致；参考图存在时优先沿用原图尺寸。
+    const size = imageDimensions(firstFrame) ?? requestedVideoDimensions(request.resolution) ?? videoDimensions(request.ratio);
     const fps = typeof parameters.fps === "number" ? parameters.fps : preset.fps ?? 24;
     const body: Record<string, unknown> = {
       prompt: request.prompt,
@@ -365,9 +397,7 @@ export default {
       ...parameters,
     };
     if (body.num_frames === undefined) delete body.num_frames;
-    const firstFrame = request.firstFrame ?? request.images?.[0];
-    if (!firstFrame) throw new Error("FastH3 Omni 需要至少一张参考图片，请先上传参考图");
-    if (firstFrame) body.init_images = [mediaUrl(firstFrame)];
-    return requestMedia(this, apiBaseUrl(this.config.baseUrl), firstFrame ? "/sdapi/v1/img2img" : "/sdapi/v1/txt2img", body, "video");
+    body.init_images = [mediaUrl(firstFrame)];
+    return requestMedia(this, apiBaseUrl(this.config.baseUrl), "/sdapi/v1/img2img", body, "video");
   },
 } satisfies ProviderDefinition<typeof rules>;
